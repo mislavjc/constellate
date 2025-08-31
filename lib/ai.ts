@@ -31,7 +31,7 @@ export async function getModelForTokens(tokens: number) {
 }
 
 // Fallback to default model
-const defaultModelName = process.env.NEBULA_MODEL || 'gpt-4o-mini';
+const defaultModelName = process.env.NEBULA_MODEL || 'gpt-5-mini';
 export const model = openai(defaultModelName);
 
 // Export default model name for backward compatibility

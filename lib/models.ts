@@ -78,7 +78,7 @@ export async function loadModelLimits(modelId: string): Promise<ModelLimits> {
 export async function pickModelFor(
   messagesTokens: number
 ): Promise<{ id: string }> {
-  const pref = process.env.NEBULA_MODEL || 'gpt-4o-mini';
+  const pref = process.env.NEBULA_MODEL || 'gpt-5-mini';
   const alts = (
     process.env.NEBULA_FALLBACK_MODELS || 'deepseek-chat,grok-3-mini-latest'
   )
