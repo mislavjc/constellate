@@ -10,10 +10,14 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^2.0.23",
     "@types/react": "^19.1.12",
+    "ai": "^5.0.28",
     "effect": "^3.17.9",
     "ink": "^6.2.3",
     "ink-spinner": "^5.0.0",
-    "react": "^19.1.1"
+    "react": "^19.1.1",
+    "slugify": "^1.6.6",
+    "zod": "^4.1.5"
   }
 }
