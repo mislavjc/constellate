@@ -234,7 +234,8 @@ const NebulaStreamingApp: React.FC<{
   maxRepos: number;
   token: string;
   onFinish: (store: NebulaStore) => void;
-}> = ({ stars, maxRepos, token, onFinish }) => {
+  outputFilename: string;
+}> = ({ stars, maxRepos, token, onFinish, outputFilename }) => {
   const [currentPhase, setCurrentPhase] = useState<
     'fetching' | 'ai-processing' | 'complete'
   >('fetching');
@@ -576,7 +577,7 @@ const NebulaStreamingApp: React.FC<{
           repoFeatures,
           parseInt(process.env.NEBULA_README_MIN_SIZE || '0')
         );
-        await fs.writeFile('README.md', md, 'utf-8');
+        await fs.writeFile(outputFilename, md, 'utf-8');
 
         setCurrentPhase('complete');
         onFinish(store);
@@ -1000,7 +1001,7 @@ const NebulaStreamingApp: React.FC<{
       </Text>
       <Newline />
       <Text color="green">
-        ✅ All processing complete! Check data/ and README.md
+        ✅ All processing complete! Check data/ and {outputFilename}
       </Text>
       <Text color="gray" dimColor>
         Press Q to quit
@@ -1011,7 +1012,22 @@ const NebulaStreamingApp: React.FC<{
 
 // ----------------------------------- CLI -----------------------------------
 const main = Effect.gen(function* () {
-  const [, , cmd] = process.argv;
+  const [, , ...args] = process.argv;
+
+  // Parse command-line arguments
+  let outputFilename = 'AWESOME.md';
+  let cmd = args[0];
+
+  // Check for --name parameter
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--name' && i + 1 < args.length) {
+      outputFilename = args[i + 1];
+      // Remove --name and its value from args for further processing
+      args.splice(i, 2);
+      cmd = args[0];
+      break;
+    }
+  }
 
   if (cmd === 'logout') {
     yield* removeToken;
@@ -1039,10 +1055,11 @@ const main = Effect.gen(function* () {
       stars={stars}
       maxRepos={MAX_REPOS_TO_PROCESS}
       token={token}
+      outputFilename={outputFilename}
       onFinish={(_store) => {
         Effect.runPromise(
           Console.log(
-            '\n✅ All processing complete! Wrote data/nebula.json and README.md'
+            `\n✅ All processing complete! Wrote data/nebula.json and ${outputFilename}`
           )
         ).catch(() => {
           // Error already handled above
