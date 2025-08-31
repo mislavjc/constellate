@@ -1,4 +1,4 @@
-import z from 'zod';
+import { z } from 'zod';
 
 // -------------------------- Categorization schema ---------------------------
 export const RepoFacts = z.object({

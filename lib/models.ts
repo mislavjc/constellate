@@ -57,9 +57,7 @@ export async function loadModelLimits(modelId: string): Promise<ModelLimits> {
 
   // models.dev keys are providers; each has .models keyed by model id
   // We try exact match first, then scan all providers to find modelId.
-  const providers = Object.values(cache) as Array<
-    z.infer<typeof ModelsDev> extends infer T ? any : never
-  >;
+  const providers = Object.values(cache) as any[];
   for (const prov of providers) {
     if (prov.models && prov.models[modelId]) {
       const lim = prov.models[modelId].limit || {};
@@ -75,4 +73,28 @@ export async function loadModelLimits(modelId: string): Promise<ModelLimits> {
     context: NEBULA_DEFAULT_CONTEXT,
     output: NEBULA_DEFAULT_OUTPUT,
   };
+}
+
+export async function pickModelFor(
+  messagesTokens: number
+): Promise<{ id: string }> {
+  const pref = process.env.NEBULA_MODEL || 'gpt-4o-mini';
+  const alts = (
+    process.env.NEBULA_FALLBACK_MODELS || 'deepseek-chat,grok-3-mini-latest'
+  )
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const candidates = [pref, ...alts];
+  for (const id of candidates) {
+    try {
+      const { context } = await loadModelLimits(id);
+      if (messagesTokens < context * 0.85) return { id };
+    } catch (e) {
+      // Continue to next candidate if this one fails
+      console.warn(`Failed to load limits for ${id}:`, e);
+    }
+  }
+  return { id: pref }; // last resort
 }

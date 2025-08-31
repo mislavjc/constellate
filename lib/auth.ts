@@ -7,8 +7,6 @@ import { runCommand } from './utils';
 const TOKEN_PATH = path.join(os.homedir(), '.nebula.json');
 const CLIENT_ID = process.env.GITHUB_CLIENT_ID ?? 'Iv1.0000000000000000';
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
-const MAX_REPOS_TO_PROCESS = parseInt(process.env.NEBULA_MAX_REPOS || '20');
-const NEBULA_BATCH = parseInt(process.env.NEBULA_BATCH || '6');
 
 export const hasGitHubCLI = (): Effect.Effect<boolean> =>
   runCommand('which gh').pipe(

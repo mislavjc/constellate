@@ -1,6 +1,6 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import { RepoFeature, RepoFacts, CategoryGlossary } from './schemas';
-import { streamObject } from 'ai';
+
 import { ExpandPlanPlus } from './schemas';
 import { CategoryDraft, AssignmentDraft } from './schemas';
 import { StreamlinedPlan } from './schemas';
@@ -11,7 +11,8 @@ import type { ModelMessage } from 'ai';
 import { z } from 'zod';
 import slugify from 'slugify';
 import { safeStreamObject } from './safe-stream';
-import { headTailSlice } from './tokens';
+import { headTailSlice, estimateTokens } from './tokens';
+import { pickModelFor } from './models';
 import {
   NEBULA_PASS0_BATCH,
   NEBULA_MAX_README_TOKENS,
@@ -22,8 +23,66 @@ import {
 } from './config';
 // ------------------------------ AI Utilities --------------------------------
 const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const modelName = process.env.NEBULA_MODEL || 'gpt-4o-mini';
-export const model = openai(modelName);
+
+// Dynamic model selection based on context needs
+export async function getModelForTokens(tokens: number) {
+  const { id } = await pickModelFor(tokens);
+  return { model: openai(id), modelId: id };
+}
+
+// Fallback to default model
+const defaultModelName = process.env.NEBULA_MODEL || 'gpt-4o-mini';
+export const model = openai(defaultModelName);
+
+// Export default model name for backward compatibility
+export const modelName = defaultModelName;
+
+// Payload slimming to reduce token usage
+function slim<T extends object>(o: T): T {
+  return JSON.parse(
+    JSON.stringify(o, (_, v) =>
+      v === '' || (Array.isArray(v) && v.length === 0) ? undefined : v
+    )
+  );
+}
+
+// Absorb QA aliases back into glossary for future runs
+export async function absorbAliasesIntoGlossary(fix: z.infer<typeof QaFix>) {
+  const g = await loadCategoryGlossary();
+  for (const [alias, target] of Object.entries(fix.aliases || {})) {
+    if (!g.discouraged_aliases[alias]) g.discouraged_aliases[alias] = target;
+  }
+  await saveCategoryGlossary(g);
+}
+
+// README render safety with singleton filtering
+export function filterCategoriesForReadme(store: NebulaStore, minSize = 2) {
+  return store.categories.filter((c) => c.repos.length >= minSize);
+}
+
+// Auto-shrink streaming wrapper for overflow fallback
+async function* streamWithAutoShrink(
+  processBatch: (group: RepoFeature[]) => Promise<any>,
+  initialBatch: RepoFeature[]
+): AsyncGenerator<any, void, unknown> {
+  let group = initialBatch;
+  while (group.length) {
+    try {
+      const result = await processBatch(group);
+      const { partialObjectStream } = result;
+      for await (const chunk of partialObjectStream) yield chunk;
+      break; // success
+    } catch (e: any) {
+      if (!/context|length|token/i.test(String(e?.message))) throw e;
+      if (group.length === 1) throw e; // cannot shrink further
+      const mid = Math.floor(group.length / 2);
+      // Recurse: first half then second half
+      yield* streamWithAutoShrink(processBatch, group.slice(0, mid));
+      yield* streamWithAutoShrink(processBatch, group.slice(mid));
+      break;
+    }
+  }
+}
 
 // Category Glossary utilities
 export async function loadCategoryGlossary(): Promise<
@@ -115,7 +174,7 @@ export async function* aiPass0FactsExtractorStreaming(
   batchRepos: RepoFeature[]
 ) {
   // MICRO-BATCH: start with configurable batch size; can shrink if overflow happens
-  const BATCH_SIZE = NEBULA_PASS0_BATCH;
+  const BATCH_SIZE = Math.max(1, Number(NEBULA_PASS0_BATCH) || 4);
   const MAX_README_TOKENS = NEBULA_MAX_README_TOKENS;
 
   const groups = Array.from(
@@ -124,60 +183,67 @@ export async function* aiPass0FactsExtractorStreaming(
   );
 
   for (const group of groups) {
-    const compact = group.map((r) => ({
-      repo: {
-        id: r.id,
-        name: r.name,
-        language: r.language,
-        stars: r.stars,
-        topics: r.topics,
-        readme: headTailSlice(r.readme_full ?? '', MAX_README_TOKENS),
-      },
-      return_schema:
-        '{ facts, purpose, capabilities, tech_stack, keywords, disclaimers }',
-      constraints: {
-        max_keywords: 16,
-        max_caps: 10,
-      },
-    }));
+    // Use auto-shrink wrapper for overflow fallback
+    yield* streamWithAutoShrink(async (batchGroup: RepoFeature[]) => {
+      const compact = batchGroup.map((r) => ({
+        repo: {
+          id: r.id,
+          name: r.name,
+          language: r.language,
+          stars: r.stars,
+          topics: r.topics,
+          readme:
+            r.purpose || r.capabilities?.length
+              ? ''
+              : headTailSlice(r.readme_full ?? '', MAX_README_TOKENS),
+        },
+        return_schema:
+          '{ facts, purpose, capabilities, tech_stack, keywords, disclaimers }',
+        constraints: {
+          max_keywords: 16,
+          max_caps: 10,
+        },
+      }));
 
-    const messages: ModelMessage[] = [
-      {
-        role: 'system',
-        content:
-          "Nebula Pass-0 (Facts). Given one repository's metadata and README,\nextract concise factual signals for categorization.\nOnly use provided text. Do not invent facts.",
-      },
-      {
-        role: 'user',
-        content: JSON.stringify(compact),
-      },
-    ];
+      const messages: ModelMessage[] = [
+        {
+          role: 'system',
+          content:
+            "Nebula Pass-0 (Facts). Given one repository's metadata and README,\nextract concise factual signals for categorization.\nOnly use provided text. Do not invent facts.",
+        },
+        {
+          role: 'user',
+          content: JSON.stringify(slim(compact)),
+        },
+      ];
 
-    const { partialObjectStream } = await safeStreamObject({
-      model,
-      modelId: modelName,
-      schema: z.object({
-        results: z
-          .array(
-            z.object({
-              id: z.string(),
-              facts: RepoFacts,
-              purpose: z.string().default(''),
-              capabilities: z.array(z.string()).default([]),
-              tech_stack: z.array(z.string()).default([]),
-              keywords: z.array(z.string()).default([]),
-              disclaimers: z.array(z.string()).default([]),
-            })
-          )
-          .default([]),
-      }),
-      messages,
-      reserveOutput: NEBULA_RESERVE_TOKENS_PASS0,
-    });
+      // Estimate tokens and select appropriate model
+      const messageTokens = estimateTokens(JSON.stringify(messages));
+      const { model: selectedModel, modelId: selectedModelId } =
+        await getModelForTokens(messageTokens);
 
-    for await (const chunk of partialObjectStream) {
-      yield chunk;
-    }
+      return await safeStreamObject({
+        model: selectedModel,
+        modelId: selectedModelId,
+        schema: z.object({
+          results: z
+            .array(
+              z.object({
+                id: z.string(),
+                facts: RepoFacts,
+                purpose: z.string().default(''),
+                capabilities: z.array(z.string()).default([]),
+                tech_stack: z.array(z.string()).default([]),
+                keywords: z.array(z.string()).default([]),
+                disclaimers: z.array(z.string()).default([]),
+              })
+            )
+            .default([]),
+        }),
+        messages,
+        reserveOutput: Number(NEBULA_RESERVE_TOKENS_PASS0) || 1024,
+      });
+    }, group);
   }
 }
 
@@ -221,14 +287,7 @@ Rules:
 - Prefer domain/intent over tech stack when deciding category (e.g., "Browser Automation" > "TypeScript").
 - Category titles: Title Case. Slugs: kebab-case, stable, deterministic.
 - Criteria begin with "Includes …" and describe what belongs/doesn't.
-- Avoid product-marketing language. Be concrete. No chain-of-thought; include a short reason field instead.
-
-Conventions:
-- Titles: Title Case. Slugs: kebab-case. Deterministic from title.
-- Descriptions ≤ 140 chars; Criteria start with "Includes …".
-- Cite evidence fields (purpose/capabilities/facts/keywords/README) in reason_short.
-- No marketing language. No chain-of-thought. Keep reasons ≤ 140 chars.
-- Use ONLY provided text; never browse or invent.`,
+- Avoid product-marketing language. Be concrete. No chain-of-thought; include a short reason field instead.`,
     },
     {
       role: 'user',
@@ -249,7 +308,7 @@ Conventions:
     modelId: modelName,
     schema: ExpandPlanPlus,
     messages,
-    reserveOutput: NEBULA_RESERVE_TOKENS_PASS1,
+    reserveOutput: Number(NEBULA_RESERVE_TOKENS_PASS1) || 2048,
   });
 
   for await (const partialObject of partialObjectStream) {
@@ -363,13 +422,7 @@ When conflicting signals exist:
 3) Prefer Glossary canonical names over new names.
 
 Tie-breakers:
-If two categories fit equally, choose the one with more repos after consolidation; otherwise choose the one in the Glossary; otherwise the broader domain.
-
-Conventions:
-- Titles: Title Case. Slugs: kebab-case. Deterministic from title.
-- Descriptions ≤ 140 chars; Criteria start with "Includes …".
-- Cite evidence fields (purpose/capabilities/facts/keywords/README) in reason_short.
-- No marketing language. No chain-of-thought. Keep reasons ≤ 140 chars.`,
+If two categories fit equally, choose the one with more repos after consolidation; otherwise choose the one in the Glossary; otherwise the broader domain.`,
     },
     {
       role: 'user',
@@ -393,7 +446,7 @@ Conventions:
     modelId: modelName,
     schema: StreamlinedPlan,
     messages,
-    reserveOutput: NEBULA_RESERVE_TOKENS_PASS2,
+    reserveOutput: Number(NEBULA_RESERVE_TOKENS_PASS2) || 2048,
   });
 
   for await (const partialObject of partialObjectStream) {
@@ -450,13 +503,7 @@ Rules:
 - Provide reasons referencing evidence fields (summary, key_topics, capabilities).
 
 Undersized categories policy:
-If count < minCategorySize, either (a) alias to closest match, or (b) keep if it is a widely recognized term (e.g., 'Authentication') with ≥ 2 and distinctive criteria.
-
-Conventions:
-- Titles: Title Case. Slugs: kebab-case. Deterministic from title.
-- Descriptions ≤ 140 chars; Criteria start with "Includes …".
-- Cite evidence fields (purpose/capabilities/facts/keywords/README) in reason_short.
-- No marketing language. No chain-of-thought. Keep reasons ≤ 140 chars.`,
+If count < minCategorySize, either (a) alias to closest match, or (b) keep if it is a widely recognized term (e.g., 'Authentication') with ≥ 2 and distinctive criteria.`,
     },
     {
       role: 'user',
@@ -478,7 +525,7 @@ Conventions:
     modelId: modelName,
     schema: QaFix,
     messages,
-    reserveOutput: NEBULA_RESERVE_TOKENS_PASS3,
+    reserveOutput: Number(NEBULA_RESERVE_TOKENS_PASS3) || 1024,
   });
 
   for await (const partialObject of partialObjectStream) {
