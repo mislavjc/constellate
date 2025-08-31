@@ -1,6 +1,16 @@
-import z from "zod";
+import z from 'zod';
 
 // -------------------------- Categorization schema ---------------------------
+export const RepoFacts = z.object({
+  is_framework: z.boolean().default(false),
+  is_cli: z.boolean().default(false),
+  is_library: z.boolean().default(false),
+  is_demo: z.boolean().default(false),
+  has_examples_dir: z.boolean().default(false),
+  has_benchmark: z.boolean().default(false),
+  license: z.string().optional(),
+});
+
 export const RepoFeature = z.object({
   id: z.string(),
   name: z.string(),
@@ -15,7 +25,12 @@ export const RepoFeature = z.object({
   created_at: z.string().optional(),
   pushed_at: z.string().optional(),
   readme_full: z.string().optional().default(''),
-  // NEW:
+  // NEW: Pass-0 extracted facts
+  facts: RepoFacts.optional(),
+  purpose: z.string().optional(),
+  capabilities: z.array(z.string()).default([]),
+  tech_stack: z.array(z.string()).default([]),
+  // NEW: Pass-1 generated content
   summary: z.string().optional().default(''),
   key_topics: z.array(z.string()).optional().default([]),
 });
@@ -162,3 +177,18 @@ export const StreamlinedPlan = z
     repos: z.array(StreamlinedRepo).optional().default([]),
   })
   .passthrough();
+
+// Category Glossary for persistent memory
+export const CategoryGlossary = z.object({
+  version: z.number().default(3),
+  preferred: z
+    .array(
+      z.object({
+        slug: z.string(),
+        title: z.string(),
+        criteria: z.string(),
+      })
+    )
+    .default([]),
+  discouraged_aliases: z.record(z.string(), z.string()).default({}),
+});

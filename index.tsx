@@ -21,9 +21,12 @@ import {
   StreamlinedPlan,
   ExpandPlanPlus,
 } from './lib/schemas';
+import { aiPass0FactsExtractorStreaming } from './lib/ai';
 import { aiPass1ExpandStreaming } from './lib/ai';
 import { mergeExpandPlans } from './lib/ai';
 import { graftSummariesIntoFeatures } from './lib/ai';
+import { graftFactsIntoFeatures } from './lib/ai';
+import { backfillCategoriesFromIndex } from './lib/ai';
 import { applyQaFix } from './lib/ai';
 import { aiPass2StreamlineStreaming } from './lib/ai';
 import { aiPass3QualityAssuranceStreaming } from './lib/ai';
@@ -49,6 +52,12 @@ function toRepoFeatures(
       created_at: details?.created_at,
       pushed_at: details?.pushed_at ?? details?.updated_at,
       readme_full: readme ?? '',
+      // Pass-0 fields (will be populated later)
+      facts: undefined,
+      purpose: undefined,
+      capabilities: [],
+      tech_stack: [],
+      // Pass-1 fields
       summary: '',
       key_topics: [],
     };
@@ -75,19 +84,21 @@ function makeStoreFromStreamlined(
 
   // Create categories
   for (const c of streamlined.categories) {
-    const base = slugify(c.slug || c.title, {
-      lower: true,
-      strict: true,
-      trim: true,
-    });
-    const s = uniqueSlug(base);
-    store.categories.push({
-      slug: s,
-      title: c.title,
-      description: c.description ?? '',
-      criteria: c.criteria ?? '',
-      repos: [],
-    });
+    if (c.slug || c.title) {
+      const base = slugify(c.slug || c.title, {
+        lower: true,
+        strict: true,
+        trim: true,
+      });
+      const s = uniqueSlug(base);
+      store.categories.push({
+        slug: s,
+        title: c.title,
+        description: c.description ?? '',
+        criteria: c.criteria ?? '',
+        repos: [],
+      });
+    }
   }
 
   // Index repos by id for quality fields
@@ -225,11 +236,12 @@ const NebulaStreamingApp: React.FC<{
   const [totalBatches, setTotalBatches] = useState(0);
   const [streamingData, setStreamingData] = useState<any>(null);
   const [processedRepos, setProcessedRepos] = useState<ProcessedRepo[]>([]);
-  const [aiPhase, setAiPhase] = useState<'pass1' | 'pass2' | 'pass3' | null>(
-    null
-  );
+  const [aiPhase, setAiPhase] = useState<
+    'pass0' | 'pass1' | 'pass2' | 'pass3' | null
+  >(null);
   const [allBatchesData, setAllBatchesData] = useState<any[]>([]);
   const [selectedBatchIndex, setSelectedBatchIndex] = useState(0);
+  const [features, setFeatures] = useState<RepoFeature[]>([]);
   const { stdout } = useStdout();
   const contentWidth = Math.min((stdout?.columns ?? 80) - 4, 100);
 
@@ -289,10 +301,35 @@ const NebulaStreamingApp: React.FC<{
 
         // Phase 2: AI Processing with streaming
         setCurrentPhase('ai-processing');
-        setAiPhase('pass1');
 
-        const features = toRepoFeatures(processed);
-        const batches = batch(features, NEBULA_BATCH);
+        let repoFeatures = toRepoFeatures(processed);
+        setFeatures(repoFeatures);
+
+        // Pass-0: Extract factual signals from READMEs (streaming)
+        setAiPhase('pass0');
+        const factsStreamingGenerator =
+          aiPass0FactsExtractorStreaming(repoFeatures);
+        let finalFactsResult: any = null;
+
+        for await (const partialResult of factsStreamingGenerator) {
+          // Update streaming data for UI
+          setStreamingData({
+            phase: 'pass0',
+            partialResult,
+            factsCount: partialResult?.results?.length || 0,
+          });
+          // Always update final result with the latest partial
+          finalFactsResult = partialResult as any;
+        }
+
+        if (finalFactsResult) {
+          graftFactsIntoFeatures(repoFeatures, finalFactsResult);
+          setFeatures([...repoFeatures]); // Update state with facts
+        }
+
+        // Pass-1: Expand with summaries
+        setAiPhase('pass1');
+        const batches = batch(repoFeatures, NEBULA_BATCH);
         setTotalBatches(batches.length);
 
         const expandPlans: z.infer<typeof ExpandPlanPlus>[] = [];
@@ -375,25 +412,31 @@ const NebulaStreamingApp: React.FC<{
             'mergeExpandPlans failed to return valid merged data'
           );
         }
-        graftSummariesIntoFeatures(features, merged.summaries);
+        graftSummariesIntoFeatures(repoFeatures, merged.summaries);
 
         // Pass 2: Streamline with streaming
         setAiPhase('pass2');
         const policies = {
           minCategorySize: parseInt(process.env.NEBULA_MIN_CAT_SIZE || '2'),
           maxCategories: parseInt(process.env.NEBULA_MAX_CATEGORIES || '80'),
+          max_new_categories: parseInt(
+            process.env.NEBULA_MAX_NEW_CATEGORIES || '12'
+          ),
         };
 
         const streamlinedGenerator = aiPass2StreamlineStreaming(
-          features,
+          repoFeatures,
           merged,
           policies
         );
         let finalStreamlined: z.infer<typeof StreamlinedPlan> | null = null;
 
         let pass2StreamCount = 0;
+        let lastCompleteResult: z.infer<typeof StreamlinedPlan> | null = null;
+
         for await (const partialResult of streamlinedGenerator) {
           pass2StreamCount++;
+
           // Update streaming data for UI
           setStreamingData({
             phase: 'pass2',
@@ -404,21 +447,41 @@ const NebulaStreamingApp: React.FC<{
               : 0,
             reposCount: partialResult.repos?.length || 0,
           });
-          // Always update final result with the latest partial
-          finalStreamlined = partialResult as z.infer<typeof StreamlinedPlan>;
+
+          // Only update final result if this partial has the required structure
+          if (
+            partialResult &&
+            typeof partialResult === 'object' &&
+            partialResult.repos !== undefined
+          ) {
+            lastCompleteResult = partialResult as z.infer<
+              typeof StreamlinedPlan
+            >;
+          }
         }
 
-        if (!finalStreamlined) {
-          throw new Error('Pass 2 failed to generate result');
+        // Use the last complete result if available, otherwise the final partial
+        finalStreamlined = lastCompleteResult || finalStreamlined;
+
+        // Fallback: if we still don't have a proper result, create a minimal one
+        if (!finalStreamlined || !finalStreamlined.repos) {
+          console.warn(
+            'Pass-2 did not return repos, creating fallback structure'
+          );
+          finalStreamlined = {
+            categories: [],
+            aliases: {},
+            repos: [], // Empty repos array as fallback
+          };
         }
 
-        const store = makeStoreFromStreamlined(features, finalStreamlined);
+        const store = makeStoreFromStreamlined(repoFeatures, finalStreamlined);
 
         // Pass 3: Quality Assurance with streaming
         setAiPhase('pass3');
         const qaGenerator = aiPass3QualityAssuranceStreaming(
           store,
-          features,
+          repoFeatures,
           policies
         );
         let finalQaFix: z.infer<typeof QaFix> | null = null;
@@ -447,11 +510,14 @@ const NebulaStreamingApp: React.FC<{
 
         applyQaFix(store, finalQaFix);
 
+        // Backfill categories from index to ensure all indexed repos appear in README
+        backfillCategoriesFromIndex(store, repoFeatures);
+
         // Write artifacts
         await fs.mkdir('data', { recursive: true });
         await fs.writeFile(
           'data/stars.json',
-          JSON.stringify(features, null, 2),
+          JSON.stringify(repoFeatures, null, 2),
           'utf-8'
         );
         await fs.writeFile(
@@ -459,7 +525,7 @@ const NebulaStreamingApp: React.FC<{
           JSON.stringify(store, null, 2),
           'utf-8'
         );
-        const md = renderReadme(store, features);
+        const md = renderReadme(store, repoFeatures);
         await fs.writeFile('README.md', md, 'utf-8');
 
         setCurrentPhase('complete');
@@ -514,7 +580,8 @@ const NebulaStreamingApp: React.FC<{
     return (
       <Box flexDirection="column" width={contentWidth}>
         <Text color="blue" bold>
-          🤖 Nebula – AI Processing Phase {aiPhase?.toUpperCase()}
+          🤖 Nebula – AI Processing Phase{' '}
+          {aiPhase === 'pass0' ? 'PASS-0 (Facts)' : aiPhase?.toUpperCase()}
         </Text>
         <Newline />
 
@@ -529,6 +596,63 @@ const NebulaStreamingApp: React.FC<{
               {isViewingCurrentBatch ? '🔴 Live' : '⚪ Past'}
             </Text>
           </Box>
+        )}
+
+        {aiPhase === 'pass0' && (
+          <>
+            <Text color="cyan">
+              Pass-0: Extracting factual signals from repository READMEs
+            </Text>
+            <Newline />
+            {streamingData && streamingData.phase === 'pass0' && (
+              <Box flexDirection="column">
+                <Text color="yellow" bold>
+                  🔴 Live Facts Extraction:
+                </Text>
+                <Box flexDirection="column" paddingLeft={2}>
+                  <Text color="green">
+                    Repositories Processed: {streamingData.factsCount || 0}
+                  </Text>
+                </Box>
+                {streamingData.partialResult?.results &&
+                  streamingData.partialResult.results.length > 0 && (
+                    <Box flexDirection="column" paddingLeft={2} marginTop={1}>
+                      <Text color="cyan" bold>
+                        Latest Facts Extracted:
+                      </Text>
+                      {streamingData.partialResult.results
+                        .slice(-3) // Show last 3 results
+                        .map((result: any, idx: number) => (
+                          <Box key={idx} flexDirection="column" paddingLeft={2}>
+                            <Text color="magenta" bold>
+                              • {result.id?.split('/').pop() || 'Unknown'}
+                            </Text>
+                            <Text color="gray">
+                              Purpose: {result.purpose?.slice(0, 50) || 'None'}
+                              ...
+                            </Text>
+                            <Text color="gray">
+                              Capabilities:{' '}
+                              {(result.capabilities || [])
+                                .slice(0, 2)
+                                .join(', ')}
+                              {(result.capabilities || []).length > 2
+                                ? '...'
+                                : ''}
+                            </Text>
+                          </Box>
+                        ))}
+                    </Box>
+                  )}
+              </Box>
+            )}
+            {!streamingData || streamingData.phase !== 'pass0' ? (
+              <Text color="green">
+                Processing {features.length} repositories for facts
+                extraction...
+              </Text>
+            ) : null}
+          </>
         )}
 
         {aiPhase === 'pass1' && currentBatchData && (
@@ -746,13 +870,44 @@ const NebulaStreamingApp: React.FC<{
                       <Text color="cyan" bold>
                         Category Aliases:
                       </Text>
-                      {Object.entries(streamingData.partialResult.aliases)
+                      {Object.entries(streamingData.partialResult.aliases || {})
                         .slice(0, 3)
-                        .map(([alias, canonical], idx) => (
-                          <Text key={idx} color="magenta">
-                            • {alias} → {String(canonical)}
-                          </Text>
-                        ))}
+                        .map(([alias, canonical], idx) => {
+                          // Handle different types of canonical values
+                          let displayValue = 'unknown';
+                          if (
+                            typeof canonical === 'string' &&
+                            canonical.trim()
+                          ) {
+                            displayValue = canonical;
+                          } else if (
+                            canonical &&
+                            typeof canonical === 'object' &&
+                            canonical !== null &&
+                            'slug' in canonical &&
+                            typeof (canonical as any).slug === 'string'
+                          ) {
+                            displayValue = (canonical as any).slug;
+                          } else if (
+                            canonical &&
+                            typeof canonical === 'object' &&
+                            canonical !== null &&
+                            'title' in canonical &&
+                            typeof (canonical as any).title === 'string'
+                          ) {
+                            displayValue = (canonical as any).title;
+                          } else if (
+                            canonical !== null &&
+                            canonical !== undefined
+                          ) {
+                            displayValue = String(canonical);
+                          }
+                          return (
+                            <Text key={idx} color="magenta">
+                              • {alias} → {displayValue}
+                            </Text>
+                          );
+                        })}
                     </Box>
                   )}
               </Box>
@@ -761,7 +916,7 @@ const NebulaStreamingApp: React.FC<{
         )}
 
         <Newline />
-        {isViewingCurrentBatch && (
+        {isViewingCurrentBatch && totalBatches > 0 && (
           <>
             <Spinner type="dots" />
             <Text color="cyan">
@@ -770,7 +925,7 @@ const NebulaStreamingApp: React.FC<{
             </Text>
           </>
         )}
-        {!isViewingCurrentBatch && (
+        {!isViewingCurrentBatch && totalBatches > 0 && (
           <Text color="gray" dimColor>
             Viewing completed batch {selectedBatchIndex + 1} of {totalBatches}
           </Text>
