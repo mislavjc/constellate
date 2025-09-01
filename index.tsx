@@ -14,7 +14,11 @@ import {
   type StarredRepo,
 } from './lib/github';
 import { batch, daysSince } from './lib/utils';
-import { MAX_REPOS_TO_PROCESS, NEBULA_BATCH } from './lib/config';
+import {
+  MAX_REPOS_TO_PROCESS,
+  NEBULA_BATCH,
+  NEBULA_README_MIN_SIZE,
+} from './lib/config';
 import {
   RepoFeature,
   NebulaStore,
@@ -23,9 +27,11 @@ import {
 } from './lib/schemas';
 import { aiPass0FactsExtractorStreaming } from './lib/ai';
 import { aiPass1ExpandStreaming } from './lib/ai';
+import { aiPass1BRefineCategories } from './lib/ai';
 import { mergeExpandPlans } from './lib/ai';
 import { graftSummariesIntoFeatures } from './lib/ai';
 import { graftFactsIntoFeatures } from './lib/ai';
+import { ensureMinimumFeatureSignals } from './lib/ai';
 import { backfillCategoriesFromIndex } from './lib/ai';
 import {
   applyQaFix,
@@ -33,6 +39,7 @@ import {
   filterCategoriesForReadme,
 } from './lib/ai';
 import { aiPass2StreamlineStreaming } from './lib/ai';
+import { aiPass25BudgetConsolidate } from './lib/ai';
 import { aiPass3QualityAssuranceStreaming } from './lib/ai';
 import { QaFix, Category } from './lib/schemas';
 
@@ -61,6 +68,7 @@ function toRepoFeatures(
       purpose: undefined,
       capabilities: [],
       tech_stack: [],
+      keywords: [],
       // Pass-1 fields
       summary: '',
       key_topics: [],
@@ -137,7 +145,6 @@ function makeStoreFromStreamlined(
       quality: source
         ? {
             last_commit_days: daysSince(source.pushed_at),
-            stars: source.stars,
             archived: source.archived,
           }
         : undefined,
@@ -147,9 +154,15 @@ function makeStoreFromStreamlined(
 
   store.aliases = streamlined.aliases || {};
 
-  // Ordering
-  for (const c of store.categories)
-    c.repos.sort((a, b) => (b.quality?.stars ?? 0) - (a.quality?.stars ?? 0));
+  // Ordering - sort by recency, then alphabetically
+  for (const c of store.categories) {
+    c.repos.sort((a, b) => {
+      const aDays = a.quality?.last_commit_days ?? Infinity;
+      const bDays = b.quality?.last_commit_days ?? Infinity;
+      if (aDays !== bDays) return aDays - bDays;
+      return (a.id || '').localeCompare(b.id || '');
+    });
+  }
   store.categories.sort((a, b) => a.title.localeCompare(b.title));
   return store;
 }
@@ -187,7 +200,7 @@ function renderReadme(
     lines.push('');
     for (const r of c.repos) {
       const name = r.id.split('/').pop() ?? r.id;
-      const starStr = r.quality?.stars ? ` – ⭐ ${r.quality?.stars}` : '';
+      const starStr = '';
       const tagStr = r.tags?.length
         ? ` _(${r.tags.slice(0, 4).join(', ')})_`
         : '';
@@ -359,7 +372,6 @@ const NebulaStreamingApp: React.FC<{
                 id: repo.id,
                 name: repo.name,
                 language: repo.language,
-                stars: repo.stars,
                 description: repo.description,
               })),
               streamingHistory: [],
@@ -434,14 +446,49 @@ const NebulaStreamingApp: React.FC<{
           throw e;
         }
 
+        // Pass-1b: Refinement step to split oversized/mixed categories
+        setAiPhase('pass1');
+        // reuse Pass-2 policies defined below; compute local refine policies here
+        try {
+          const refinePolicies = {
+            maxCategories: parseInt(process.env.NEBULA_MAX_CATEGORIES || '100'),
+          };
+          const refineGen = aiPass1BRefineCategories(
+            repoFeatures,
+            merged,
+            refinePolicies
+          );
+          let finalRefined: any = null;
+          for await (const partial of refineGen) {
+            finalRefined = partial as any;
+            setStreamingData({
+              phase: 'pass1',
+              partialResult: finalRefined,
+              categoriesCount: finalRefined?.categories?.length || 0,
+              summariesCount: finalRefined?.summaries?.length || 0,
+              assignmentsCount: finalRefined?.assignments?.length || 0,
+            });
+          }
+          if (
+            finalRefined &&
+            finalRefined.categories &&
+            finalRefined.assignments
+          ) {
+            merged = await mergeExpandPlans([merged, finalRefined]);
+            graftSummariesIntoFeatures(repoFeatures, merged.summaries);
+          }
+        } catch (e: any) {
+          // Non-fatal: continue with existing merged
+        }
+
         // Pass 2: Streamline with streaming
         setAiPhase('pass2');
         let finalStreamlined: z.infer<typeof StreamlinedPlan> | null = null;
         const policies = {
-          minCategorySize: parseInt(process.env.NEBULA_MIN_CAT_SIZE || '2'),
-          maxCategories: parseInt(process.env.NEBULA_MAX_CATEGORIES || '80'),
+          minCategorySize: parseInt(process.env.NEBULA_MIN_CAT_SIZE || '1'),
+          maxCategories: parseInt(process.env.NEBULA_MAX_CATEGORIES || '100'),
           max_new_categories: parseInt(
-            process.env.NEBULA_MAX_NEW_CATEGORIES || '12'
+            process.env.NEBULA_MAX_NEW_CATEGORIES || '50'
           ),
         };
         try {
@@ -509,12 +556,121 @@ const NebulaStreamingApp: React.FC<{
               repos: fallbackRepos,
             };
           }
+
+          // Ensure all repositories are assigned (no missing repos)
+          try {
+            const assigned = new Set(
+              (finalStreamlined?.repos || []).map((r: any) => r.id)
+            );
+            const missing = repoFeatures.filter((f) => !assigned.has(f.id));
+            if (missing.length > 0) {
+              // Determine dominant category among already-assigned repos
+              const freq = new Map<string, number>();
+              for (const r of finalStreamlined.repos as any[]) {
+                const slug = slugify(r.primaryCategory || '', {
+                  lower: true,
+                  strict: true,
+                  trim: true,
+                });
+                if (!slug) continue;
+                freq.set(slug, (freq.get(slug) || 0) + 1);
+              }
+              let dominantSlug = '';
+              let dominantCount = -1;
+              for (const [slug, n] of freq) {
+                if (n > dominantCount) {
+                  dominantSlug = slug;
+                  dominantCount = n;
+                }
+              }
+              // If none yet, prefer a common canonical category if proposed
+              if (!dominantSlug && merged?.categories?.length) {
+                const preferred = merged.categories.find(
+                  (c: any) =>
+                    slugify(c.slug || c.title || '', {
+                      lower: true,
+                      strict: true,
+                      trim: true,
+                    }) === 'libraries'
+                );
+                dominantSlug = preferred
+                  ? 'libraries'
+                  : slugify(
+                      merged.categories[0].slug ||
+                        merged.categories[0].title ||
+                        'libraries',
+                      {
+                        lower: true,
+                        strict: true,
+                        trim: true,
+                      }
+                    );
+              }
+
+              const mergedAssignIndex: Record<string, string> = {};
+              if (merged && Array.isArray(merged.assignments)) {
+                for (const a of merged.assignments) {
+                  if (a?.repo && a?.categories?.[0]?.key) {
+                    mergedAssignIndex[a.repo] = slugify(a.categories[0].key, {
+                      lower: true,
+                      strict: true,
+                      trim: true,
+                    });
+                  }
+                }
+              }
+
+              for (const m of missing) {
+                const inferred =
+                  mergedAssignIndex[m.id] || dominantSlug || 'libraries';
+                (finalStreamlined.repos as any[]).push({
+                  id: m.id,
+                  primaryCategory: inferred,
+                  reason: 'Auto-filled to ensure full coverage',
+                  tags: [],
+                  confidence: 0.5,
+                });
+              }
+            }
+          } catch {}
         } catch (e: any) {
           e.message = `[PASS-2] ${e.message}`;
           throw e;
         }
 
         const store = makeStoreFromStreamlined(repoFeatures, finalStreamlined);
+
+        // Pass 2.5: Category budget consolidation
+        setAiPhase('pass2');
+        try {
+          const budget = {
+            min: parseInt(process.env.NEBULA_CAT_TARGET_MIN || '22'),
+            max: parseInt(process.env.NEBULA_CAT_TARGET_MAX || '36'),
+          };
+          const budgetGen = aiPass25BudgetConsolidate(
+            store,
+            repoFeatures,
+            budget
+          );
+          let budgetFix: any = null;
+          for await (const partial of budgetGen) {
+            budgetFix = partial as any;
+            setStreamingData({
+              phase: 'pass2',
+              partialResult: budgetFix,
+              categoriesCount: budgetFix?.categories?.length || 0,
+              aliasesCount: budgetFix?.aliases
+                ? Object.keys(budgetFix.aliases).length
+                : 0,
+              reassignCount: budgetFix?.reassign?.length || 0,
+            });
+          }
+          if (budgetFix) {
+            applyQaFix(store, budgetFix);
+          }
+        } catch (e) {
+          // proceed regardless
+        }
 
         // Pass 3: Quality Assurance with streaming
         setAiPhase('pass3');
@@ -560,6 +716,9 @@ const NebulaStreamingApp: React.FC<{
         // Backfill categories from index to ensure all indexed repos appear in README
         backfillCategoriesFromIndex(store, repoFeatures);
 
+        // Final signal backfill to prevent empty summaries/capabilities
+        ensureMinimumFeatureSignals(repoFeatures);
+
         // Write artifacts
         await fs.mkdir('data', { recursive: true });
         await fs.writeFile(
@@ -572,11 +731,7 @@ const NebulaStreamingApp: React.FC<{
           JSON.stringify(store, null, 2),
           'utf-8'
         );
-        const md = renderReadme(
-          store,
-          repoFeatures,
-          parseInt(process.env.NEBULA_README_MIN_SIZE || '0')
-        );
+        const md = renderReadme(store, repoFeatures, NEBULA_README_MIN_SIZE);
         await fs.writeFile(outputFilename, md, 'utf-8');
 
         setCurrentPhase('complete');
@@ -1021,7 +1176,7 @@ const main = Effect.gen(function* () {
   // Check for --name parameter
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--name' && i + 1 < args.length) {
-      outputFilename = args[i + 1];
+      outputFilename = args[i + 1]!;
       // Remove --name and its value from args for further processing
       args.splice(i, 2);
       cmd = args[0];

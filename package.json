@@ -10,7 +10,6 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@ai-sdk/openai": "^2.0.23",
     "@types/react": "^19.1.12",
     "ai": "^5.0.28",
     "effect": "^3.17.9",

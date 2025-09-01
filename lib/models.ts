@@ -5,13 +5,20 @@
  */
 
 import { z } from 'zod';
+import { promises as fs } from 'fs';
 import {
   MODELS_DEV_URL,
   NEBULA_DEFAULT_CONTEXT,
   NEBULA_DEFAULT_OUTPUT,
+  NEBULA_MODEL,
+  NEBULA_FALLBACK_MODELS,
 } from './config';
 
 const CACHE_PATH = 'data/models-dev-cache.json';
+
+// Cache model limits to avoid repeated file/network operations
+let modelLimitsCache: Record<string, ModelLimits> | null = null;
+let cacheLoadPromise: Promise<void> | null = null;
 
 const ModelsDev = z.record(
   z.string(),
@@ -37,56 +44,88 @@ const ModelsDev = z.record(
 
 export type ModelLimits = { context: number; output: number };
 
-export async function loadModelLimits(modelId: string): Promise<ModelLimits> {
-  // Try cache first
-  let cache: any = null;
-  try {
-    const fs = await import('fs/promises');
-    cache = JSON.parse(await fs.readFile(CACHE_PATH, 'utf-8'));
-  } catch {}
+// Load model limits cache (once per session)
+async function ensureCacheLoaded(): Promise<void> {
+  if (modelLimitsCache) return; // Already loaded
+  if (cacheLoadPromise) return cacheLoadPromise; // Already loading
 
-  if (!cache) {
-    const res = await fetch(MODELS_DEV_URL);
-    const json = await res.json();
-    const parsed = ModelsDev.parse(json);
-    cache = parsed;
-    const fs = await import('fs/promises');
-    await fs.mkdir('data', { recursive: true });
-    await fs.writeFile(CACHE_PATH, JSON.stringify(parsed, null, 2));
-  }
+  cacheLoadPromise = (async () => {
+    try {
+      // Try to load from disk cache first
+      const cacheData = await fs.readFile(CACHE_PATH, 'utf-8');
+      const parsed = ModelsDev.parse(JSON.parse(cacheData));
 
-  // models.dev keys are providers; each has .models keyed by model id
-  // We try exact match first, then scan all providers to find modelId.
-  const providers = Object.values(cache) as any[];
-  for (const prov of providers) {
-    if (prov.models && prov.models[modelId]) {
-      const lim = prov.models[modelId].limit || {};
-      return {
-        context: lim.context ?? NEBULA_DEFAULT_CONTEXT,
-        output: lim.output ?? NEBULA_DEFAULT_OUTPUT,
-      };
+      // Convert models.dev format to our internal cache format
+      modelLimitsCache = {};
+      const providers = Object.values(parsed) as any[];
+      for (const prov of providers) {
+        if (prov.models) {
+          for (const [modelId, modelData] of Object.entries(prov.models)) {
+            const lim = (modelData as any).limit || {};
+            modelLimitsCache[modelId] = {
+              context: lim.context ?? NEBULA_DEFAULT_CONTEXT,
+              output: lim.output ?? NEBULA_DEFAULT_OUTPUT,
+            };
+          }
+        }
+      }
+    } catch {
+      // Cache doesn't exist or is invalid, fetch from API
+      try {
+        const res = await fetch(MODELS_DEV_URL);
+        const json = await res.json();
+        const parsed = ModelsDev.parse(json);
+
+        // Convert and cache
+        modelLimitsCache = {};
+        const providers = Object.values(parsed) as any[];
+        for (const prov of providers) {
+          if (prov.models) {
+            for (const [modelId, modelData] of Object.entries(prov.models)) {
+              const lim = (modelData as any).limit || {};
+              modelLimitsCache[modelId] = {
+                context: lim.context ?? NEBULA_DEFAULT_CONTEXT,
+                output: lim.output ?? NEBULA_DEFAULT_OUTPUT,
+              };
+            }
+          }
+        }
+
+        // Save to disk cache
+        await fs.mkdir('data', { recursive: true });
+        await fs.writeFile(CACHE_PATH, JSON.stringify(parsed, null, 2));
+      } catch (error) {
+        console.warn('Failed to load model limits from API:', error);
+        // Use minimal fallback cache
+        modelLimitsCache = {
+          [NEBULA_MODEL]: {
+            context: NEBULA_DEFAULT_CONTEXT,
+            output: NEBULA_DEFAULT_OUTPUT,
+          },
+        };
+      }
     }
-  }
+  })();
 
-  // Fallback if unknown
-  return {
-    context: NEBULA_DEFAULT_CONTEXT,
-    output: NEBULA_DEFAULT_OUTPUT,
-  };
+  await cacheLoadPromise;
+}
+
+export async function loadModelLimits(modelId: string): Promise<ModelLimits> {
+  await ensureCacheLoaded();
+
+  // Return cached limits or fallback
+  return (
+    modelLimitsCache![modelId] ?? {
+      context: NEBULA_DEFAULT_CONTEXT,
+      output: NEBULA_DEFAULT_OUTPUT,
+    }
+  );
 }
 
 export async function pickModelFor(
   messagesTokens: number
 ): Promise<{ id: string }> {
-  const pref = process.env.NEBULA_MODEL || 'gpt-5-mini';
-  const alts = (
-    process.env.NEBULA_FALLBACK_MODELS || 'deepseek-chat,grok-3-mini-latest'
-  )
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  const candidates = [pref, ...alts];
+  const candidates = [NEBULA_MODEL, ...NEBULA_FALLBACK_MODELS];
   for (const id of candidates) {
     try {
       const { context } = await loadModelLimits(id);
@@ -96,5 +135,5 @@ export async function pickModelFor(
       console.warn(`Failed to load limits for ${id}:`, e);
     }
   }
-  return { id: pref }; // last resort
+  return { id: NEBULA_MODEL }; // last resort
 }

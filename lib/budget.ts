@@ -11,6 +11,9 @@ import { loadModelLimits } from './models';
 const SYS_OVERHEAD = 300; // safety margin for tool/wrapper overhead
 const JSON_OVERHEAD = 300;
 
+// Cache for truncation plans to avoid repeated calculations
+const truncationPlanCache = new Map<string, TruncationPlan>();
+
 export type TruncationPlan = {
   maxInput: number;
   maxOutput: number;
@@ -21,9 +24,22 @@ export async function makeTruncationPlan(
   modelId: string,
   reserveOutput = 2048
 ): Promise<TruncationPlan> {
+  // Create cache key from parameters
+  const cacheKey = `${modelId}:${reserveOutput}`;
+
+  // Check cache first
+  const cached = truncationPlanCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  // Calculate and cache
   const lim = await loadModelLimits(modelId);
   const maxInput = Math.max(4096, lim.context - reserveOutput - SYS_OVERHEAD);
-  return { maxInput, maxOutput: lim.output, reserveOutput };
+  const plan = { maxInput, maxOutput: lim.output, reserveOutput };
+
+  truncationPlanCache.set(cacheKey, plan);
+  return plan;
 }
 
 // Given a messages[] with big user payloads, trim them to fit.
@@ -31,15 +47,16 @@ export function fitMessagesWithinBudget(
   messages: ModelMessage[],
   maxInputTokens: number
 ): { messages: ModelMessage[]; trimmed: boolean } {
-  // Count tokens per message; aggressively shrink biggest user content first
+  // Count tokens per message; aggressively shrink biggest user content first (optimized)
   const counts = messages.map((m, index) => ({
     i: index,
     role: m.role,
-    tokens: estimateTokens(
+    tokens:
       typeof m.content === 'string'
-        ? m.content
-        : JSON.stringify(m.content || '')
-    ),
+        ? estimateTokens(m.content)
+        : Array.isArray(m.content)
+        ? m.content.length * 10 // Rough estimate for array content
+        : 0,
   }));
 
   let total = counts.reduce((a, x) => a + x.tokens, 0) + JSON_OVERHEAD;
@@ -58,7 +75,9 @@ export function fitMessagesWithinBudget(
     content:
       typeof m.content === 'string'
         ? m.content
-        : JSON.stringify(m.content || ''),
+        : Array.isArray(m.content)
+        ? '[ARRAY_CONTENT]' // Placeholder for array content
+        : String(m.content || ''),
   }));
   let trimmed = false;
 

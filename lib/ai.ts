@@ -1,4 +1,3 @@
-import { createOpenAI } from '@ai-sdk/openai';
 import { RepoFeature, RepoFacts, CategoryGlossary } from './schemas';
 
 import { ExpandPlanPlus } from './schemas';
@@ -11,6 +10,19 @@ import type { ModelMessage } from 'ai';
 import { z } from 'zod';
 import slugify from 'slugify';
 import { safeStreamObject } from './safe-stream';
+
+// Cached slugify function to avoid repeated computations
+const slugifyCache = new Map<string, string>();
+const SLUGIFY_OPTIONS = { lower: true, strict: true, trim: true };
+
+function cachedSlugify(text: string): string {
+  if (slugifyCache.has(text)) {
+    return slugifyCache.get(text)!;
+  }
+  const result = slugify(text, SLUGIFY_OPTIONS);
+  slugifyCache.set(text, result);
+  return result;
+}
 import { headTailSlice, estimateTokens } from './tokens';
 import { pickModelFor } from './models';
 import {
@@ -20,30 +32,99 @@ import {
   NEBULA_RESERVE_TOKENS_PASS1,
   NEBULA_RESERVE_TOKENS_PASS2,
   NEBULA_RESERVE_TOKENS_PASS3,
+  NEBULA_MODEL,
+} from './config';
+import {
+  NEBULA_CAT_TARGET_MIN,
+  NEBULA_CAT_TARGET_MAX,
+  NEBULA_SPLIT_THRESHOLD,
 } from './config';
 // ------------------------------ AI Utilities --------------------------------
-const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // Dynamic model selection based on context needs
 export async function getModelForTokens(tokens: number) {
   const { id } = await pickModelFor(tokens);
-  return { model: openai(id), modelId: id };
+  return { model: id, modelId: id };
 }
 
-// Fallback to default model
-const defaultModelName = process.env.NEBULA_MODEL || 'gpt-5-mini';
-export const model = openai(defaultModelName);
+// Use central OpenAI model string for Vercel AI Gateway
+export const model = NEBULA_MODEL;
 
 // Export default model name for backward compatibility
-export const modelName = defaultModelName;
+export const modelName = NEBULA_MODEL;
 
-// Payload slimming to reduce token usage
-function slim<T extends object>(o: T): T {
-  return JSON.parse(
-    JSON.stringify(o, (_, v) =>
-      v === '' || (Array.isArray(v) && v.length === 0) ? undefined : v
+// Cache for token estimation to avoid repeated calculations
+const tokenEstimationCache = new Map<string, number>();
+
+// Fast token estimation for messages without JSON serialization
+function estimateTokensFromMessages(messages: ModelMessage[]): number {
+  // Create a simple cache key from message structure
+  const cacheKey = messages
+    .map(
+      (m) =>
+        `${m.role}:${
+          typeof m.content === 'string' ? m.content.length : 'array'
+        }`
     )
-  );
+    .join('|');
+
+  // Check cache first
+  const cached = tokenEstimationCache.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  let totalTokens = 0;
+
+  for (const message of messages) {
+    // Add tokens for role and basic structure
+    totalTokens += 4; // ~4 tokens for role + metadata
+
+    if (typeof message.content === 'string') {
+      totalTokens += estimateTokens(message.content);
+    } else if (Array.isArray(message.content)) {
+      // Handle array content (images, etc.)
+      totalTokens += message.content.length * 10; // Rough estimate
+    }
+  }
+
+  // Add overhead for message formatting
+  const result = Math.ceil(totalTokens * 1.1);
+
+  // Cache the result (limit cache size to prevent memory leaks)
+  if (tokenEstimationCache.size > 1000) {
+    tokenEstimationCache.clear();
+  }
+  tokenEstimationCache.set(cacheKey, result);
+
+  return result;
+}
+
+// Payload slimming to reduce token usage (optimized - no JSON roundtrip)
+function slim<T extends object>(o: T): T {
+  const result: any = {};
+
+  for (const [key, value] of Object.entries(o)) {
+    if (value === '' || (Array.isArray(value) && value.length === 0)) {
+      continue; // Skip empty values
+    }
+
+    if (Array.isArray(value)) {
+      // Recursively clean arrays
+      result[key] = value
+        .map((item) =>
+          typeof item === 'object' && item !== null ? slim(item) : item
+        )
+        .filter((item) => item !== '' && item !== null && item !== undefined);
+    } else if (typeof value === 'object' && value !== null) {
+      // Recursively clean nested objects
+      result[key] = slim(value);
+    } else {
+      result[key] = value;
+    }
+  }
+
+  return result as T;
 }
 
 // Absorb QA aliases back into glossary for future runs
@@ -53,10 +134,11 @@ export async function absorbAliasesIntoGlossary(fix: z.infer<typeof QaFix>) {
     if (!g.discouraged_aliases[alias]) g.discouraged_aliases[alias] = target;
   }
   await saveCategoryGlossary(g);
+  // Cache is already invalidated in saveCategoryGlossary
 }
 
 // README render safety with singleton filtering
-export function filterCategoriesForReadme(store: NebulaStore, minSize = 2) {
+export function filterCategoriesForReadme(store: NebulaStore, minSize = 1) {
   return store.categories.filter((c) => c.repos.length >= minSize);
 }
 
@@ -84,68 +166,94 @@ async function* streamWithAutoShrink(
   }
 }
 
-// Category Glossary utilities
+// Category Glossary utilities - with caching for performance
+let glossaryCache: z.infer<typeof CategoryGlossary> | null = null;
+let glossaryCachePromise: Promise<z.infer<typeof CategoryGlossary>> | null =
+  null;
+
 export async function loadCategoryGlossary(): Promise<
   z.infer<typeof CategoryGlossary>
 > {
-  try {
-    const fs = await import('fs/promises');
-    const data = await fs.readFile('data/category-glossary.json', 'utf-8');
-    return CategoryGlossary.parse(JSON.parse(data));
-  } catch {
-    // Return default if file doesn't exist
-    return CategoryGlossary.parse({
-      version: 3,
-      preferred: [
-        {
-          slug: 'ai-agents',
-          title: 'AI Agents',
-          criteria:
-            'Includes multi-step autonomous or tool-using agents that plan/act/reflect',
-        },
-        {
-          slug: 'browser-automation',
-          title: 'Browser Automation',
-          criteria: 'Includes headless/vision-guided web UI automation',
-        },
-        {
-          slug: 'authentication',
-          title: 'Authentication',
-          criteria:
-            'Includes login, authorization, and user identity management systems',
-        },
-        {
-          slug: 'databases',
-          title: 'Databases',
-          criteria:
-            'Includes database engines, ORMs, and data persistence solutions',
-        },
-        {
-          slug: 'frameworks',
-          title: 'Frameworks',
-          criteria: 'Includes application frameworks and development platforms',
-        },
-        {
-          slug: 'libraries',
-          title: 'Libraries',
-          criteria: 'Includes utility libraries and code packages',
-        },
-        {
-          slug: 'cli-tools',
-          title: 'CLI Tools',
-          criteria:
-            'Includes command-line interfaces and terminal applications',
-        },
-        {
-          slug: 'web-development',
-          title: 'Web Development',
-          criteria:
-            'Includes frontend, backend, and full-stack web development tools',
-        },
-      ],
-      discouraged_aliases: {},
-    });
+  // Return cached result if available
+  if (glossaryCache) {
+    return glossaryCache;
   }
+
+  // Return pending promise if already loading
+  if (glossaryCachePromise) {
+    return glossaryCachePromise;
+  }
+
+  // Load and cache
+  glossaryCachePromise = (async () => {
+    try {
+      const fs = await import('fs/promises');
+      const data = await fs.readFile('data/category-glossary.json', 'utf-8');
+      const parsed = CategoryGlossary.parse(JSON.parse(data));
+      glossaryCache = parsed; // Cache the result
+      return parsed;
+    } catch {
+      // Return default if file doesn't exist
+      const defaultGlossary = CategoryGlossary.parse({
+        version: 3,
+        preferred: [
+          {
+            slug: 'ai-agents',
+            title: 'AI Agents',
+            criteria:
+              'Includes multi-step autonomous or tool-using agents that plan/act/reflect',
+          },
+          {
+            slug: 'browser-automation',
+            title: 'Browser Automation',
+            criteria: 'Includes headless/vision-guided web UI automation',
+          },
+          {
+            slug: 'authentication',
+            title: 'Authentication',
+            criteria:
+              'Includes login, authorization, and user identity management systems',
+          },
+          {
+            slug: 'databases',
+            title: 'Databases',
+            criteria:
+              'Includes database engines, ORMs, and data persistence solutions',
+          },
+          {
+            slug: 'frameworks',
+            title: 'Frameworks',
+            criteria:
+              'Includes application frameworks and development platforms',
+          },
+          {
+            slug: 'libraries',
+            title: 'Libraries',
+            criteria: 'Includes utility libraries and code packages',
+          },
+          {
+            slug: 'cli-tools',
+            title: 'CLI Tools',
+            criteria:
+              'Includes command-line interfaces and terminal applications',
+          },
+          {
+            slug: 'web-development',
+            title: 'Web Development',
+            criteria:
+              'Includes frontend, backend, and full-stack web development tools',
+          },
+        ],
+        discouraged_aliases: {},
+      });
+      glossaryCache = defaultGlossary;
+      return defaultGlossary;
+    }
+  })();
+
+  const result = await glossaryCachePromise;
+  glossaryCachePromise = null; // Clear the promise
+  return result;
 }
 
 export async function saveCategoryGlossary(
@@ -157,11 +265,18 @@ export async function saveCategoryGlossary(
     'data/category-glossary.json',
     JSON.stringify(glossary, null, 2)
   );
+
+  // Invalidate cache so next load gets fresh data
+  glossaryCache = null;
+  glossaryCachePromise = null;
 }
 
+// Pre-compile regex for performance
+const codeFenceRegex = /```json\s*|```/gi;
+
 export function stripNonJson(s: string) {
-  // remove code fences and leading/trailing noise
-  const cleaned = s.replace(/```json\s*|```/gi, '').trim();
+  // remove code fences and leading/trailing noise (optimized with pre-compiled regex)
+  const cleaned = s.replace(codeFenceRegex, '').trim();
   // try to find first/last JSON object
   const first = cleaned.indexOf('{');
   const last = cleaned.lastIndexOf('}');
@@ -190,7 +305,6 @@ export async function* aiPass0FactsExtractorStreaming(
           id: r.id,
           name: r.name,
           language: r.language,
-          stars: r.stars,
           topics: r.topics,
           readme:
             r.purpose || r.capabilities?.length
@@ -209,7 +323,7 @@ export async function* aiPass0FactsExtractorStreaming(
         {
           role: 'system',
           content:
-            "Nebula Pass-0 (Facts). Given one repository's metadata and README,\nextract concise factual signals for categorization.\nOnly use provided text. Do not invent facts.",
+            "Nebula Pass-0 (Facts). Given one repository's metadata and README,\nextract concise factual signals for categorization.\nOnly use provided text. Do not invent facts.\n\nSelf-questions (answer implicitly via fields):\n- What is the repo's primary purpose in one short phrase?\n- Which concrete capabilities are explicitly mentioned (avoid generic words)?\n- Which tech stack elements are stated (frameworks, runtimes, CLIs)?\n- Which keywords best disambiguate domain (≤16)?\n- Any clear signals the repo is a CLI, library, framework, demo?\n- Any license or disclaimers worth noting?",
         },
         {
           role: 'user',
@@ -217,8 +331,8 @@ export async function* aiPass0FactsExtractorStreaming(
         },
       ];
 
-      // Estimate tokens and select appropriate model
-      const messageTokens = estimateTokens(JSON.stringify(messages));
+      // Estimate tokens and select appropriate model (optimized - avoid JSON.stringify)
+      const messageTokens = estimateTokensFromMessages(messages);
       const { model: selectedModel, modelId: selectedModelId } =
         await getModelForTokens(messageTokens);
 
@@ -255,13 +369,13 @@ export async function* aiPass1ExpandStreaming(batchRepos: RepoFeature[]) {
     id: r.id,
     name: r.name,
     language: r.language,
-    stars: r.stars,
     topics: r.topics,
     // Include Pass-0 extracted facts for richer context
     facts: r.facts ?? null,
     purpose: r.purpose ?? '',
     capabilities: r.capabilities ?? [],
     tech_stack: r.tech_stack ?? [],
+    keywords: r.keywords ?? [],
     // Use token-aware truncation instead of fixed char limit
     readme: headTailSlice(r.readme_full ?? '', MAX_README_TOKENS),
   }));
@@ -280,24 +394,38 @@ Nebula Pass-1 (Expand). For each repo:
 (A) 1–2 sentence factual summary (no hype).
 (B) 3–10 key_topics (deduped, lowercase).
 (C) Propose candidate categories (title, short description, inclusion criteria).
-(D) Propose multi-category assignments with short reasons referencing evidence.
+(D) Assign each repo to EXACTLY ONE primary category with short reasons referencing evidence.
 
 Rules:
 - Use ONLY provided signals (facts, purpose, capabilities, tech_stack, topics, README chunk).
 - Prefer domain/intent over tech stack when deciding category (e.g., "Browser Automation" > "TypeScript").
 - Category titles: Title Case. Slugs: kebab-case, stable, deterministic.
 - Criteria begin with "Includes …" and describe what belongs/doesn't.
-- Avoid product-marketing language. Be concrete. No chain-of-thought; include a short reason field instead.`,
+- Avoid product-marketing language. Be concrete. No chain-of-thought; include a short reason field instead.
+
+Granularity guidance:
+- Split broad umbrellas like "Libraries" into focused domains when evidence supports it (e.g., "Vector Databases", "Prompt UI Components", "CLI Utilities", "Color Tools", "PDF Rendering", "RAG Frameworks", "Agent Protocols", "Benchmarking", "LLM Routing", "Token Utilities").
+- Prefer ≥ 20–40 distinct categories overall if repos meaningfully differ; avoid collapsing unrelated tools.
+- Create small categories (size 1) when clearly distinct; they can be merged later in QA.
+- If unsure, prefer creating a more specific category over a broad one.
+
+Segmentation guidance:
+- When categories like "Libraries" or "Web Development" are too broad, segment by:
+  1) Primary language (TypeScript/JavaScript, Python, Rust, Go, etc.)
+  2) Software layer (API/SDK, UI components, CLI tools, Database/Storage, Infra/DevOps)
+  3) Major framework (React, Vue, Svelte) when it meaningfully improves precision.
+- Reflect segmentation in category titles and criteria.`,
     },
     {
       role: 'user',
       content: JSON.stringify({
-        return_schema: '{ categories[], assignments[], summaries[] }',
+        return_schema: '{ categories[], assignments[], summaries[] }', // assignments: [{ repo, category, reason, tags }]
         repos: compact,
         policy: {
-          max_new_categories: 80,
+          max_new_categories: 180,
           category_name_len: { title_max: 32, desc_max: 140 },
           summary_len_max_chars: 220,
+          segmentation: { by_language: true, by_layer: true, min_group: 2 },
         },
       }),
     },
@@ -316,6 +444,155 @@ Rules:
   }
 }
 
+// Pass-1b (Refine & Split Oversized Categories)
+export async function* aiPass1BRefineCategories(
+  allRepos: RepoFeature[],
+  merged: {
+    categories: z.infer<typeof CategoryDraft>[];
+    assignments: z.infer<typeof AssignmentDraft>[];
+    summaries: Record<string, { summary: string; key_topics: string[] }>;
+  },
+  policies: { maxCategories: number; splitThreshold?: number }
+) {
+  const repoSignals = allRepos.map((r) => ({
+    id: r.id,
+    name: r.name,
+    topics: r.topics,
+    key_topics: r.key_topics || [],
+    keywords: r.keywords || [],
+    facts: r.facts || null,
+    capabilities: r.capabilities || [],
+    tech_stack: r.tech_stack || [],
+  }));
+
+  const messages: ModelMessage[] = [
+    {
+      role: 'system',
+      content: `Nebula Pass-1b (Refine & Split Oversized Categories).
+Given a proposed category list and preliminary assignments, refine the category taxonomy by:
+1) Splitting oversized or mixed categories into more specific subdomains using keywords/key_topics and facts.
+2) Renaming vague categories to clearer, domain-specific titles with precise criteria.
+3) Limiting total categories to <= maxCategories, but prioritize splitting when mixed.
+
+Segmentation axes:
+- Primary language (TypeScript/JavaScript, Python, Rust, Go, etc.)
+- Software layer (API/SDK, UI components, CLI tools, Database/Storage, Infra/DevOps)
+- Major framework (React, Vue, Svelte) when it adds clarity.
+
+Guidelines:
+- If a category contains ≥ splitThreshold repos spanning multiple languages or layers, split along that axis.
+- Keep slugs stable and deterministic (kebab-case). Avoid hype in descriptions and criteria.
+
+Criteria format requirement:
+- For every category, ensure criteria has both lines:
+  Includes: ...\n  Excludes: ...
+
+Rules:
+- Split when a category contains clearly separable subdomains (e.g., rendering vs. routing vs. caching).
+- Keep slugs stable; generate kebab-case slugs from titles.
+- Provide updated categories and updated assignments (one or multiple per repo allowed in this refinement).`,
+    },
+    {
+      role: 'user',
+      content: JSON.stringify({
+        policies: { ...policies, splitThreshold: policies.splitThreshold || 6 },
+        repos: repoSignals,
+        proposed: merged,
+        return_schema: '{ categories[], assignments[] }',
+      }),
+    },
+  ];
+
+  const { partialObjectStream } = await safeStreamObject({
+    model,
+    modelId: modelName,
+    schema: ExpandPlanPlus, // reuse: categories+assignments are compatible
+    messages,
+    reserveOutput: Number(NEBULA_RESERVE_TOKENS_PASS1) || 2048,
+  });
+
+  for await (const partialObject of partialObjectStream) {
+    yield partialObject;
+  }
+}
+
+// Pass-2.5 (Category Budget Consolidation)
+export async function* aiPass25BudgetConsolidate(
+  store: NebulaStore,
+  allRepos: RepoFeature[],
+  budget: { min: number; max: number }
+) {
+  const repoMeta = allRepos.map((r) => ({
+    id: r.id,
+    name: r.name,
+    language: r.language,
+    key_topics: r.key_topics || [],
+    keywords: r.keywords || [],
+    facts: r.facts || null,
+    capabilities: r.capabilities || [],
+    tech_stack: r.tech_stack || [],
+  }));
+
+  const snapshot = {
+    categories: store.categories.map((c) => ({
+      slug: c.slug,
+      title: c.title,
+      description: c.description,
+      criteria: c.criteria,
+      repos: c.repos.map((r) => r.id),
+    })),
+  };
+
+  const messages: ModelMessage[] = [
+    {
+      role: 'system',
+      content: `Nebula Pass-2.5 (Category Budget Consolidation).
+You will consolidate categories to fit within a target range while preserving specificity.
+Goals:
+1) Merge near-duplicates and micro-categories into the best-fit parent.
+2) Keep important, widely-recognized domains distinct.
+3) Prefer layer/language splits only when helpful within the target budget.
+
+Target range: min = ${NEBULA_CAT_TARGET_MIN}, max = ${NEBULA_CAT_TARGET_MAX}.
+Return updated canonical categories and a reassignment map (id -> category).`,
+    },
+    {
+      role: 'user',
+      content: JSON.stringify({ budget, snapshot, repoMeta }),
+    },
+  ];
+
+  const BudgetFix = z.object({
+    categories: z
+      .array(
+        z.object({
+          slug: z.string().optional(),
+          title: z.string(),
+          description: z.string().optional().default(''),
+          criteria: z.string().optional().default(''),
+        })
+      )
+      .default([]),
+    aliases: z.record(z.string(), z.string()).default({}),
+    reassign: z
+      .array(z.object({ id: z.string(), toCategory: z.string() }))
+      .default([]),
+    delete: z.array(z.string()).default([]),
+  });
+
+  const { partialObjectStream } = await safeStreamObject({
+    model,
+    modelId: modelName,
+    schema: BudgetFix,
+    messages,
+    reserveOutput: Number(NEBULA_RESERVE_TOKENS_PASS2) || 2048,
+  });
+
+  for await (const partialObject of partialObjectStream) {
+    yield partialObject;
+  }
+}
+
 export async function mergeExpandPlans(
   plans: z.infer<typeof ExpandPlanPlus>[]
 ) {
@@ -327,11 +604,7 @@ export async function mergeExpandPlans(
   for (const p of plans) {
     for (const c of p.categories) {
       if (c.slug || c.title) {
-        const key = slugify(c.slug || c.title, {
-          lower: true,
-          strict: true,
-          trim: true,
-        });
+        const key = cachedSlugify(c.slug || c.title);
         if (!catMap.has(key))
           catMap.set(key, {
             title: c.title,
@@ -383,7 +656,6 @@ export async function* aiPass2StreamlineStreaming(
     id: r.id,
     name: r.name,
     language: r.language,
-    stars: r.stars,
     topics: r.topics,
     summary: merged.summaries[r.id]?.summary ?? '',
     key_topics: merged.summaries[r.id]?.key_topics ?? [],
@@ -407,14 +679,17 @@ canonical set, and assign EXACTLY ONE primary category per repo.
 
 Decision rules:
 - Prefer purpose/domain over implementation tech.
-- If two categories differ only by framework (e.g., "Prompt UI" vs "Prompt UI (React)"),
-  keep the framework-agnostic one; note framework in criteria if helpful.
+- Language/framework-specific categories are acceptable if they improve clarity or if the parent category would otherwise be too broad (e.g., size ≥ splitThreshold or mixed subdomains). Note the specificity in criteria.
 - If a repo fits multiple domains, choose the one a newcomer would expect from the README title/opening.
 
 Outputs must be deterministic:
 - Reuse canonical slugs from the provided Category Glossary when semantically equivalent.
 - Create at most N new categories (given by policies).
 - Provide a short per-assignment reason citing evidence fields (purpose, capabilities, keywords).
+
+Criteria format requirement:
+- For every category, ensure criteria has both lines:
+  Includes: ...\n  Excludes: ...
 
 When conflicting signals exist:
 1) Purpose > Capabilities > Facts > Keywords > Topics > Tech stack.
@@ -429,7 +704,8 @@ If two categories fit equally, choose the one with more repos after consolidatio
       content: JSON.stringify({
         policies: {
           ...policies,
-          max_new_categories: policies.max_new_categories || 12,
+          max_new_categories: policies.max_new_categories || 80,
+          splitThreshold: 6,
         },
         repos: repoSummaries,
         proposed: merged,
@@ -473,7 +749,6 @@ export async function* aiPass3QualityAssuranceStreaming(
     repoMeta[r.id] = {
       summary: r.summary ?? '',
       topics: r.key_topics ?? r.topics ?? [],
-      stars: r.stars,
       // Include Pass-0 facts for richer context
       facts: r.facts ?? null,
       capabilities: r.capabilities ?? [],
@@ -543,8 +818,8 @@ export function applyQaFix(store: NebulaStore, fix: z.infer<typeof QaFix>) {
       typeof target === 'string' &&
       target.trim()
     ) {
-      const a = slugify(alias, { lower: true, strict: true, trim: true });
-      const t = slugify(target, { lower: true, strict: true, trim: true });
+      const a = cachedSlugify(alias);
+      const t = cachedSlugify(target);
       aliasTo.set(a, t);
     }
   }
@@ -553,11 +828,7 @@ export function applyQaFix(store: NebulaStore, fix: z.infer<typeof QaFix>) {
   const canon = new Map<string, Category>();
   for (const c of fix.categories || []) {
     if (c.slug || c.title) {
-      const s = slugify(c.slug || c.title, {
-        lower: true,
-        strict: true,
-        trim: true,
-      });
+      const s = cachedSlugify(c.slug || c.title);
       canon.set(s, {
         slug: s,
         title: c.title,
@@ -578,16 +849,13 @@ export function applyQaFix(store: NebulaStore, fix: z.infer<typeof QaFix>) {
           typeof x.toCategory === 'string' &&
           x.toCategory.trim()
       )
-      .map((x) => [
-        x.id,
-        slugify(x.toCategory, { lower: true, strict: true, trim: true }),
-      ])
+      .map((x) => [x.id, cachedSlugify(x.toCategory)])
   );
 
   const kill = new Set(
     (fix.delete || [])
       .filter((s) => typeof s === 'string' && s.trim())
-      .map((s) => slugify(s, { lower: true, strict: true, trim: true }))
+      .map((s) => cachedSlugify(s))
   );
 
   for (const c of store.categories) {
@@ -638,8 +906,15 @@ export function applyQaFix(store: NebulaStore, fix: z.infer<typeof QaFix>) {
   );
 
   // 5) Sort consistently
-  for (const c of store.categories)
-    c.repos.sort((a, b) => (b.quality?.stars ?? 0) - (a.quality?.stars ?? 0));
+  for (const c of store.categories) {
+    // Sort by recency (most recent commits first), then alphabetically by ID
+    c.repos.sort((a, b) => {
+      const aDays = a.quality?.last_commit_days ?? Infinity;
+      const bDays = b.quality?.last_commit_days ?? Infinity;
+      if (aDays !== bDays) return aDays - bDays;
+      return (a.id || '').localeCompare(b.id || '');
+    });
+  }
   store.categories.sort((a, b) => a.title.localeCompare(b.title));
 }
 
@@ -671,6 +946,85 @@ export function graftFactsIntoFeatures(
       f.purpose = result.purpose;
       f.capabilities = result.capabilities;
       f.tech_stack = result.tech_stack;
+      if (Array.isArray(result.keywords)) f.keywords = result.keywords;
+    }
+  }
+}
+
+// Ensure features have non-empty summary/capabilities/keywords/tech_stack/purpose
+export function ensureMinimumFeatureSignals(features: RepoFeature[]) {
+  // Pre-compile regex for performance
+  const whitespaceRegex = /\s+/g;
+
+  const toSentence = (s: string) =>
+    (s || '').replace(whitespaceRegex, ' ').trim().slice(0, 220);
+
+  // Optimized string processing function
+  const processStrings = (arr: any[], maxLength: number, fallback: string) => {
+    const result: string[] = [];
+    for (let i = 0; i < arr.length && result.length < maxLength; i++) {
+      const str = String(arr[i] || '')
+        .toLowerCase()
+        .trim();
+      if (str && !result.includes(str)) {
+        result.push(str);
+      }
+    }
+    return result.length ? result : [fallback];
+  };
+
+  for (const f of features) {
+    const topics = Array.isArray(f.topics) ? f.topics : [];
+    const keywords = Array.isArray(f.keywords) ? f.keywords : [];
+    const caps = Array.isArray(f.capabilities) ? f.capabilities : [];
+    const stack = Array.isArray(f.tech_stack) ? f.tech_stack : [];
+
+    // Capabilities: derive from keywords or topics if empty (optimized)
+    if (!caps.length) {
+      f.capabilities = processStrings(
+        keywords.length ? keywords : topics,
+        8,
+        'general'
+      );
+    }
+
+    // Keywords: ensure at least something (from topics/capabilities) (optimized)
+    if (!keywords.length) {
+      f.keywords = processStrings(
+        topics.length ? topics : f.capabilities,
+        12,
+        'misc'
+      );
+    }
+
+    // Tech stack: ensure includes language and CLI/lib flags
+    if (!stack.length) {
+      const s: string[] = [];
+      if (f.language) s.push(String(f.language));
+      if (f.facts?.is_cli) s.push('CLI');
+      if (f.facts?.is_library) s.push('library');
+      if (f.facts?.is_framework) s.push('framework');
+      f.tech_stack = s.length ? s : f.language ? [String(f.language)] : [];
+    }
+
+    // Purpose: fallback from description or summary
+    if (!f.purpose || !String(f.purpose).trim()) {
+      const d = typeof f.description === 'string' ? f.description : '';
+      f.purpose = toSentence(d) || undefined;
+    }
+
+    // Summary: ensure non-empty fallback
+    if (
+      !f.summary ||
+      !String(f.summary).trim() ||
+      String(f.summary).length < 20
+    ) {
+      const desc = typeof f.description === 'string' ? f.description : '';
+      const lang = f.language ? `${f.language} ` : '';
+      const capsSnippet = (f.capabilities || []).slice(0, 3).join(', ');
+      const topicsSnippet = topics.slice(0, 3).join(', ');
+      const base = desc || `${f.name} – ${lang}${capsSnippet || topicsSnippet}`;
+      f.summary = toSentence(base || `${f.name} repository.`);
     }
   }
 }
@@ -721,7 +1075,6 @@ export function backfillCategoriesFromIndex(
                       (1000 * 60 * 60 * 24)
                   )
                 : undefined,
-              stars: sourceRepo.stars,
               archived: sourceRepo.archived,
             }
           : undefined,
@@ -737,6 +1090,12 @@ export function backfillCategoriesFromIndex(
   // Sort for stable output
   store.categories.sort((a, b) => a.title.localeCompare(b.title));
   for (const c of store.categories) {
-    c.repos.sort((a, b) => (b.quality?.stars ?? 0) - (a.quality?.stars ?? 0));
+    // Sort by recency (most recent commits first), then alphabetically by ID
+    c.repos.sort((a, b) => {
+      const aDays = a.quality?.last_commit_days ?? Infinity;
+      const bDays = b.quality?.last_commit_days ?? Infinity;
+      if (aDays !== bDays) return aDays - bDays;
+      return (a.id || '').localeCompare(b.id || '');
+    });
   }
 }

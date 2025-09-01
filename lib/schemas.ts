@@ -30,6 +30,8 @@ export const RepoFeature = z.object({
   purpose: z.string().optional(),
   capabilities: z.array(z.string()).default([]),
   tech_stack: z.array(z.string()).default([]),
+  // NEW: keywords extracted (Pass-0)
+  keywords: z.array(z.string()).optional().default([]),
   // NEW: Pass-1 generated content
   summary: z.string().optional().default(''),
   key_topics: z.array(z.string()).optional().default([]),
@@ -115,15 +117,9 @@ export const CategoryDraft = z
 export const AssignmentDraft = z
   .object({
     repo: z.string(),
-    categories: z.array(
-      z
-        .object({
-          key: z.string(),
-          reason: z.string().optional().default(''),
-          tags: z.array(z.string()).optional().default([]),
-        })
-        .passthrough()
-    ),
+    category: z.string(), // Single category assignment
+    reason: z.string().optional().default(''),
+    tags: z.array(z.string()).optional().default([]),
   })
   .passthrough();
 
