@@ -1,14 +1,14 @@
 /**
- * Model limits and context management for Nebula pipeline
+ * Model limits and context management for Constellate pipeline
  * Uses AI gateway to get model information and limits
  */
 
 import { gateway } from '@ai-sdk/gateway';
 import {
-  NEBULA_DEFAULT_CONTEXT,
-  NEBULA_DEFAULT_OUTPUT,
-  NEBULA_MODEL,
-  NEBULA_FALLBACK_MODELS,
+  CONSTELLATE_DEFAULT_CONTEXT,
+  CONSTELLATE_DEFAULT_OUTPUT,
+  CONSTELLATE_MODEL,
+  CONSTELLATE_FALLBACK_MODELS,
 } from './config';
 
 export type ModelLimits = { context: number; output: number };
@@ -42,8 +42,8 @@ export async function loadModelLimits(modelId: string): Promise<ModelLimits> {
   const model = gatewayModelsCache?.find((m: any) => m.id === modelId);
   if (model) {
     // Try to extract context limits from model info
-    let context = NEBULA_DEFAULT_CONTEXT;
-    let output = NEBULA_DEFAULT_OUTPUT;
+    let context = CONSTELLATE_DEFAULT_CONTEXT;
+    let output = CONSTELLATE_DEFAULT_OUTPUT;
 
     // Try to extract from model description or metadata
     if (model.description) {
@@ -76,15 +76,15 @@ export async function loadModelLimits(modelId: string): Promise<ModelLimits> {
 
   // Fallback for unknown models
   return {
-    context: NEBULA_DEFAULT_CONTEXT,
-    output: NEBULA_DEFAULT_OUTPUT,
+    context: CONSTELLATE_DEFAULT_CONTEXT,
+    output: CONSTELLATE_DEFAULT_OUTPUT,
   };
 }
 
 export async function pickModelFor(
   messagesTokens: number
 ): Promise<{ id: string }> {
-  const candidates = [NEBULA_MODEL, ...NEBULA_FALLBACK_MODELS];
+  const candidates = [CONSTELLATE_MODEL, ...CONSTELLATE_FALLBACK_MODELS];
   for (const id of candidates) {
     try {
       const { context } = await loadModelLimits(id);
@@ -94,7 +94,7 @@ export async function pickModelFor(
       console.warn(`Failed to load limits for ${id}:`, e);
     }
   }
-  return { id: NEBULA_MODEL }; // last resort
+  return { id: CONSTELLATE_MODEL }; // last resort
 }
 
 export async function getAvailableModels(): Promise<any[]> {

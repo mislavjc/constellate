@@ -3,7 +3,7 @@ import { RepoFeature, RepoFacts, CategoryGlossary } from './schemas';
 import { ExpandPlanPlus } from './schemas';
 import { CategoryDraft, AssignmentDraft } from './schemas';
 import { StreamlinedPlan } from './schemas';
-import { NebulaStore } from './schemas';
+import { ConstellateStore } from './schemas';
 import { QaFix } from './schemas';
 import { Category } from './schemas';
 import type { ModelMessage } from 'ai';
@@ -25,7 +25,7 @@ function cachedSlugify(text: string): string {
 }
 import { headTailSlice, estimateTokens } from './tokens';
 import { pickModelFor } from './models';
-import { NEBULA_MODEL } from './config';
+import { CONSTELLATE_MODEL } from './config';
 // ------------------------------ AI Utilities --------------------------------
 
 // Dynamic model selection based on context needs
@@ -35,10 +35,10 @@ export async function getModelForTokens(tokens: number) {
 }
 
 // Use central OpenAI model string for Vercel AI Gateway
-export const model = NEBULA_MODEL;
+export const model = CONSTELLATE_MODEL;
 
 // Export default model name for backward compatibility
-export const modelName = NEBULA_MODEL;
+export const modelName = CONSTELLATE_MODEL;
 
 // Cache for token estimation to avoid repeated calculations
 const tokenEstimationCache = new Map<string, number>();
@@ -125,7 +125,7 @@ export async function absorbAliasesIntoGlossary(fix: z.infer<typeof QaFix>) {
 }
 
 // README render safety with singleton filtering
-export function filterCategoriesForReadme(store: NebulaStore, minSize = 1) {
+export function filterCategoriesForReadme(store: ConstellateStore, minSize = 1) {
   return store.categories.filter((c) => c.repos.length >= minSize);
 }
 
@@ -175,7 +175,7 @@ export async function loadCategoryGlossary(): Promise<
   glossaryCachePromise = (async () => {
     try {
       const fs = await import('fs/promises');
-      const data = await fs.readFile('.nebula/category-glossary.json', 'utf-8');
+      const data = await fs.readFile('.constellate/category-glossary.json', 'utf-8');
       const parsed = CategoryGlossary.parse(JSON.parse(data));
       glossaryCache = parsed; // Cache the result
       return parsed;
@@ -247,9 +247,9 @@ export async function saveCategoryGlossary(
   glossary: z.infer<typeof CategoryGlossary>
 ): Promise<void> {
   const fs = await import('fs/promises');
-  await fs.mkdir('.nebula', { recursive: true });
+  await fs.mkdir('.constellate', { recursive: true });
   await fs.writeFile(
-    '.nebula/category-glossary.json',
+    '.constellate/category-glossary.json',
     JSON.stringify(glossary, null, 2)
   );
 
@@ -310,7 +310,7 @@ export async function* aiPass0FactsExtractorStreaming(
         {
           role: 'system',
           content:
-            "Nebula Pass-0 (Facts). Given one repository's metadata and README,\nextract concise factual signals for categorization.\nOnly use provided text. Do not invent facts.\n\nSelf-questions (answer implicitly via fields):\n- What is the repo's primary purpose in one short phrase?\n- Which concrete capabilities are explicitly mentioned (avoid generic words)?\n- Which tech stack elements are stated (frameworks, runtimes, CLIs)?\n- Which keywords best disambiguate domain (≤16)?\n- Any clear signals the repo is a CLI, library, framework, demo?\n- Any license or disclaimers worth noting?",
+            "Constellate Pass-0 (Facts). Given one repository's metadata and README,\nextract concise factual signals for categorization.\nOnly use provided text. Do not invent facts.\n\nSelf-questions (answer implicitly via fields):\n- What is the repo's primary purpose in one short phrase?\n- Which concrete capabilities are explicitly mentioned (avoid generic words)?\n- Which tech stack elements are stated (frameworks, runtimes, CLIs)?\n- Which keywords best disambiguate domain (≤16)?\n- Any clear signals the repo is a CLI, library, framework, demo?\n- Any license or disclaimers worth noting?",
         },
         {
           role: 'user',
@@ -377,7 +377,7 @@ export async function* aiPass1ExpandStreaming(batchRepos: RepoFeature[]) {
 - No marketing language. No chain-of-thought. Keep reasons ≤ 140 chars.
 - Use ONLY provided text; never browse or invent.
 
-Nebula Pass-1 (Expand). For each repo:
+Constellate Pass-1 (Expand). For each repo:
 (A) 1–2 sentence factual summary (no hype).
 (B) 3–10 key_topics (deduped, lowercase).
 (C) Propose candidate categories (title, short description, inclusion criteria).
@@ -455,7 +455,7 @@ export async function* aiPass1BRefineCategories(
   const messages: ModelMessage[] = [
     {
       role: 'system',
-      content: `Nebula Pass-1b (Refine & Split Oversized Categories).
+      content: `Constellate Pass-1b (Refine & Split Oversized Categories).
 Given a proposed category list and preliminary assignments, refine the category taxonomy by:
 1) Splitting oversized or mixed categories into more specific subdomains using keywords/key_topics and facts.
 2) Renaming vague categories to clearer, domain-specific titles with precise criteria.
@@ -505,7 +505,7 @@ Rules:
 
 // Pass-2.5 (Category Budget Consolidation)
 export async function* aiPass25BudgetConsolidate(
-  store: NebulaStore,
+  store: ConstellateStore,
   allRepos: RepoFeature[],
   budget: { min: number; max: number }
 ) {
@@ -533,7 +533,7 @@ export async function* aiPass25BudgetConsolidate(
   const messages: ModelMessage[] = [
     {
       role: 'system',
-      content: `Nebula Pass-2.5 (Category Budget Consolidation).
+      content: `Constellate Pass-2.5 (Category Budget Consolidation).
 You will consolidate categories to fit within a target range while preserving specificity.
 Goals:
 1) Merge near-duplicates and micro-categories into the best-fit parent.
@@ -661,7 +661,7 @@ export async function* aiPass2StreamlineStreaming(
 - Cite evidence fields (purpose/capabilities/facts/keywords/README) in reason_short.
 - No marketing language. No chain-of-thought. Keep reasons ≤ 140 chars.
 
-Nebula Pass-2 (Streamline). Merge overlapping categories, map aliases to a
+Constellate Pass-2 (Streamline). Merge overlapping categories, map aliases to a
 canonical set, and assign EXACTLY ONE primary category per repo.
 
 Decision rules:
@@ -718,7 +718,7 @@ If two categories fit equally, choose the one with more repos after consolidatio
 }
 
 export async function* aiPass3QualityAssuranceStreaming(
-  storeDraft: NebulaStore,
+  storeDraft: ConstellateStore,
   allRepos: RepoFeature[],
   policies: { minCategorySize: number }
 ) {
@@ -752,7 +752,7 @@ export async function* aiPass3QualityAssuranceStreaming(
 - Cite evidence fields (purpose/capabilities/facts/keywords/README) in reason_short.
 - No marketing language. No chain-of-thought. Keep reasons ≤ 140 chars.
 
-Nebula Pass-3 (QA). You receive canonical categories, an index of primary
+Constellate Pass-3 (QA). You receive canonical categories, an index of primary
 assignments, and repo meta. Your job:
 1) Detect near-duplicate categories and propose alias merges.
 2) Drop or merge categories below min size, unless they are uniquely useful.
@@ -795,7 +795,7 @@ If count < minCategorySize, either (a) alias to closest match, or (b) keep if it
   }
 }
 
-export function applyQaFix(store: NebulaStore, fix: z.infer<typeof QaFix>) {
+export function applyQaFix(store: ConstellateStore, fix: z.infer<typeof QaFix>) {
   // 1) Build canonical slug map
   const aliasTo = new Map<string, string>();
   for (const [alias, target] of Object.entries(fix.aliases || {})) {
@@ -1018,7 +1018,7 @@ export function ensureMinimumFeatureSignals(features: RepoFeature[]) {
 
 // Backfill categories from index - ensures every slug in store.index has a corresponding category
 export function backfillCategoriesFromIndex(
-  store: NebulaStore,
+  store: ConstellateStore,
   allRepos: RepoFeature[]
 ) {
   const catBySlug = new Map(store.categories.map((c) => [c.slug, c]));

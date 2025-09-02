@@ -1,7 +1,7 @@
 /**
  * Safe streaming wrapper for AI calls with context overflow handling
  * Automatically retries on context limit errors with progressive truncation
- * Provides bulletproof context management for all Nebula passes
+ * Provides bulletproof context management for all Constellate passes
  */
 
 import { streamObject } from 'ai';

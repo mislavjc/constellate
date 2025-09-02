@@ -60,7 +60,7 @@ export const Category = z.object({
 });
 export type Category = z.infer<typeof Category>;
 
-export const NebulaStore = z.object({
+export const ConstellateStore = z.object({
   version: z.number().default(1),
   generated_at: z.string(),
   policies: z
@@ -69,16 +69,16 @@ export const NebulaStore = z.object({
         .number()
         .int()
         .positive()
-        .default(parseInt(process.env.NEBULA_MIN_CAT_SIZE || '2')),
+        .default(parseInt(process.env.CONSTELLATE_MIN_CAT_SIZE || '2')),
       maxCategories: z
         .number()
         .int()
         .positive()
-        .default(parseInt(process.env.NEBULA_MAX_CATEGORIES || '80')),
+        .default(parseInt(process.env.CONSTELLATE_MAX_CATEGORIES || '80')),
     })
     .default({
-      minCategorySize: parseInt(process.env.NEBULA_MIN_CAT_SIZE || '2'),
-      maxCategories: parseInt(process.env.NEBULA_MAX_CATEGORIES || '80'),
+      minCategorySize: parseInt(process.env.CONSTELLATE_MIN_CAT_SIZE || '2'),
+      maxCategories: parseInt(process.env.CONSTELLATE_MAX_CATEGORIES || '80'),
     }),
   categories: z.array(Category).default([]),
   orphans: z.array(z.string()).default([]),
@@ -95,7 +95,7 @@ export const NebulaStore = z.object({
     )
     .default([]),
 });
-export type NebulaStore = z.infer<typeof NebulaStore>;
+export type ConstellateStore = z.infer<typeof ConstellateStore>;
 
 // NEW: short, factual summary for each repo (from README)
 export const RepoSummary = z.object({

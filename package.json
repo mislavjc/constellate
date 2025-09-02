@@ -1,8 +1,28 @@
 {
-  "name": "nebula",
-  "module": "index.tsx",
+  "name": "constellate",
+  "version": "0.1.0",
+  "description": "Turn a repo list into a clean constellation of categories.",
   "type": "module",
-  "private": true,
+  "bin": {
+    "constellate": "cli.cjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "dist",
+    "cli.cjs"
+  ],
+  "scripts": {
+    "build": "bun build index.tsx --outdir dist --target node --minify --sourcemap=external",
+    "dev": "bun run index.tsx",
+    "prepublishOnly": "bun run build"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mislavjc/constellate.git"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   },
@@ -13,6 +33,7 @@
     "@ai-sdk/gateway": "^1.0.15",
     "@types/react": "^19.1.12",
     "ai": "^5.0.28",
+    "dotenv": "^17.2.1",
     "effect": "^3.17.9",
     "ink": "^6.2.3",
     "ink-spinner": "^5.0.0",

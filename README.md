@@ -15,11 +15,11 @@
 
 </center>
 
-# 🌌 Nebula
+# 🌌 Constellate
 
 **Transform your GitHub stars into beautifully organized, AI-curated collections**
 
-Nebula is a powerful CLI tool that analyzes your GitHub starred repositories using advanced AI and automatically organizes them into meaningful categories. It creates an "awesome list" style markdown file with intelligent categorization, summaries, and metadata.
+Constellate is a powerful CLI tool that analyzes your GitHub starred repositories using advanced AI and automatically organizes them into meaningful categories. It creates an "awesome list" style markdown file with intelligent categorization, summaries, and metadata.
 
 ## ✨ Features
 
@@ -46,7 +46,7 @@ Nebula is a powerful CLI tool that analyzes your GitHub starred repositories usi
 
    ```bash
    git clone <your-repo-url>
-   cd nebula
+   cd constellate
    ```
 
 2. **Install dependencies:**
@@ -55,13 +55,41 @@ Nebula is a powerful CLI tool that analyzes your GitHub starred repositories usi
    bun install
    ```
 
-3. **Set up environment variables:**
+3. **Set up environment variables (.env file):**
+
    ```bash
-   export GITHUB_TOKEN="your_github_token_here"
-   export AI_GATEWAY_API_KEY="your_ai_gateway_api_key_here"
+   # Only the Vercel AI Gateway API key goes in .env
+   echo "AI_GATEWAY_API_KEY=your_vercel_ai_gateway_api_key_here" > .env
+   ```
+
+4. **Configure application settings (.constellate/config.json):**
+
+   ```bash
+   # Run initial setup to create .constellate/config.json
+   bun run index.tsx config
+
+   # Or manually create the config file:
+   mkdir -p .constellate
+   cat > .constellate/config.json << EOF
+   {
+     "CONSTELLATE_MAX_REPOS": "100",
+     "CONSTELLATE_MODEL": "openai/gpt-4o-mini",
+     "CONSTELLATE_FALLBACK_MODELS": ["openai/gpt-3.5-turbo", "openai/gpt-4"],
+     "GITHUB_TOKEN": "your_github_personal_access_token_here"
+   }
+   EOF
    ```
 
 ### Usage
+
+**First-time setup:**
+
+```bash
+# Configure your settings interactively
+bun run index.tsx config
+
+# Or manually set up your configuration files as shown above
+```
 
 **Basic usage (creates AWESOME.md):**
 
@@ -75,7 +103,20 @@ bun run index.tsx
 bun run index.tsx --name MY_STARS.md
 ```
 
-**First-time setup (if needed):**
+**Alternative execution methods:**
+
+```bash
+# Using npx (after publishing or linking locally)
+npx constellate
+
+# Using bunx
+bunx constellate
+
+# Direct execution
+node cli.cjs
+```
+
+**Authentication (if needed):**
 
 ```bash
 bun run index.tsx login
@@ -89,7 +130,7 @@ bun run index.tsx logout
 
 ## 🎯 How It Works
 
-Nebula uses a sophisticated 4-pass AI processing pipeline:
+Constellate uses a sophisticated 4-pass AI processing pipeline:
 
 ### Pass 0: Facts Extraction
 
@@ -117,27 +158,63 @@ Nebula uses a sophisticated 4-pass AI processing pipeline:
 
 ## 📁 Output Structure
 
-Nebula generates several files:
+Constellate generates several files in your project directory:
 
 ```
 your-project/
-├── AWESOME.md          # Main categorized list (or custom name)
-├── .nebula/
-│   ├── nebula.json     # Processed repository data with categories
-│   ├── stars.json      # Raw repository metadata
-│   └── category-glossary.json  # AI-learned category definitions
+├── AWESOME.md                    # Main categorized list (or custom name)
+├── .constellate/
+│   ├── config.json               # Your configuration settings
+│   ├── constellate.json          # Processed repository data with categories
+│   ├── repos.json                # Raw repository metadata (renamed from stars.json)
+│   └── category-glossary.json    # AI-learned category definitions
+└── .env                          # Environment variables (AI Gateway key only)
 ```
+
+### Key Files Created:
+
+- **AWESOME.md**: The main output file with your organized repository list
+- **.constellate/constellate.json**: Complete processed data with all repository metadata, categories, and AI analysis
+- **.constellate/repos.json**: Raw repository data fetched from GitHub
+- **.constellate/category-glossary.json**: AI-learned category definitions for consistency across runs
 
 ## ⚙️ Configuration
 
-### Environment Variables
+### Configuration Files
 
-| Variable                 | Default               | Description                     |
-| ------------------------ | --------------------- | ------------------------------- |
-| `GITHUB_TOKEN`           | Required              | GitHub Personal Access Token    |
-| `NEBULA_MAX_REPOS`       | `100`                 | Maximum repositories to process |
-| `NEBULA_MODEL`           | `openai/gpt-oss-20b`  | AI model to use                 |
-| `NEBULA_FALLBACK_MODELS` | `openai/gpt-oss-120b` | Comma-separated fallback models |
+Constellate uses two configuration files:
+
+#### 1. Environment Variables (.env)
+
+**Only the Vercel AI Gateway API key goes here:**
+
+```bash
+# .env file - only for Vercel AI Gateway
+AI_GATEWAY_API_KEY=vck_your_vercel_ai_gateway_key_here
+```
+
+#### 2. Application Settings (.constellate/config.json)
+
+**All other configuration goes here:**
+
+```json
+{
+  "GITHUB_TOKEN": "your_github_personal_access_token_here",
+  "CONSTELLATE_MAX_REPOS": "100",
+  "CONSTELLATE_MODEL": "openai/gpt-4o-mini",
+  "CONSTELLATE_FALLBACK_MODELS": ["openai/gpt-3.5-turbo", "openai/gpt-4"]
+}
+```
+
+### Configuration Options
+
+| Variable                      | File                       | Default                | Description                     |
+| ----------------------------- | -------------------------- | ---------------------- | ------------------------------- |
+| `AI_GATEWAY_API_KEY`          | `.env`                     | Required               | Vercel AI Gateway API key       |
+| `GITHUB_TOKEN`                | `.constellate/config.json` | Required               | GitHub Personal Access Token    |
+| `CONSTELLATE_MAX_REPOS`       | `.constellate/config.json` | `100`                  | Maximum repositories to process |
+| `CONSTELLATE_MODEL`           | `.constellate/config.json` | `openai/gpt-4o-mini`   | Primary AI model to use         |
+| `CONSTELLATE_FALLBACK_MODELS` | `.constellate/config.json` | `openai/gpt-3.5-turbo` | Fallback AI models              |
 
 ### CLI Options
 
@@ -150,7 +227,7 @@ your-project/
 ## 🎨 Example Output
 
 ```markdown
-# Awesome – Generated by Nebula
+# Awesome – Generated by Constellate
 
 > Categories distilled from your stars via multi‑pass AI. Updated 2025-01-15.
 
@@ -175,8 +252,10 @@ Advanced AI agent framework for autonomous task execution.
 ### Project Structure
 
 ```
-nebula/
+constellate/
 ├── index.tsx              # Main CLI application
+├── cli.cjs               # Executable wrapper script
+├── .env                  # Environment variables (AI Gateway key only)
 ├── lib/
 │   ├── ai.ts             # AI processing pipeline
 │   ├── auth.ts           # GitHub authentication
@@ -184,8 +263,13 @@ nebula/
 │   ├── models.ts         # AI model selection
 │   ├── schemas.ts        # Data validation schemas
 │   └── utils.ts          # Utility functions
-├── .nebula/              # Generated data files
-└── package.json
+├── .constellate/         # Application configuration & data files
+│   ├── config.json       # User configuration settings
+│   ├── constellate.json  # Processed repository data
+│   ├── repos.json        # Raw repository metadata
+│   └── category-glossary.json # AI-learned category definitions
+├── dist/                 # Compiled JavaScript output
+└── package.json          # Package configuration
 ```
 
 ### Building & Running
@@ -232,24 +316,30 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 **"No starred repositories found"**
 
-- Verify your GitHub token has the correct permissions
+- Verify your GitHub token in `.constellate/config.json` has the correct permissions
 - Check that you have starred repositories
+
+**"AI Gateway authentication failed"**
+
+- Verify your `AI_GATEWAY_API_KEY` in `.env` is correct
+- Make sure you're using a valid Vercel AI Gateway key
 
 **"AI Gateway API rate limit exceeded"**
 
-- Reduce `NEBULA_MAX_REPOS` or wait for rate limit reset
+- Reduce `CONSTELLATE_MAX_REPOS` in `.constellate/config.json` or wait for rate limit reset
 - Consider upgrading your Vercel AI Gateway plan
 
-**"Processing timeout"**
+**"Configuration not found"**
 
-- Reduce batch sizes with `NEBULA_BATCH`
-- Increase timeout values if needed
+- Run `bun run index.tsx config` to set up your configuration
+- Ensure `.constellate/config.json` exists with proper settings
+- Make sure `.env` contains your `AI_GATEWAY_API_KEY`
 
 ### Getting Help
 
-- Check the [Issues](https://github.com/your-username/nebula/issues) page
-- Review the configuration options above
-- Ensure all environment variables are set correctly
+- Check the [Issues](https://github.com/mislavjc/constellate/issues) page
+- Review the configuration files above
+- Ensure both `.env` and `.constellate/config.json` are properly configured
 
 ---
 

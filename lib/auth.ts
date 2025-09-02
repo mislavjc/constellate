@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { runCommand } from './utils';
 
-const TOKEN_PATH = path.join(os.homedir(), '.nebula.json');
+const TOKEN_PATH = path.join(os.homedir(), '.constellate.json');
 const CLIENT_ID = process.env.GITHUB_CLIENT_ID ?? 'Iv1.0000000000000000';
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 
@@ -162,7 +162,7 @@ export const whoAmI = (token: string) =>
           Authorization: `Bearer ${token}`,
           Accept: 'application/vnd.github+json',
           'X-GitHub-Api-Version': '2022-11-28',
-          'User-Agent': 'nebula',
+          'User-Agent': 'constellate',
         },
       });
       if (!r.ok) return null;
@@ -246,7 +246,7 @@ export const ensureAuthenticatedToken = (
     if (interactive) {
       if (GITHUB_TOKEN && forceLogin) {
         yield* Console.log(
-          'ℹ️  You have GITHUB_TOKEN set. Use `nebula logout` first to use OAuth.'
+          'ℹ️  You have GITHUB_TOKEN set. Use `constellate logout` first to use OAuth.'
         );
         return yield* Effect.fail(
           new Error('GITHUB_TOKEN is set, cannot use interactive login')
