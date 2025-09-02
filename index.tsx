@@ -1,7 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { render, Text, Box, Newline, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
-import Spinner from 'ink-spinner';
+import {
+  Select,
+  Spinner as UiSpinner,
+  Alert,
+  StatusMessage,
+  Badge,
+  ProgressBar,
+  UnorderedList,
+} from '@inkjs/ui';
 import { Effect, Console, Layer, ConfigProvider } from 'effect';
 import * as fs from 'node:fs/promises';
 import { z } from 'zod';
@@ -42,6 +50,133 @@ import { aiPass25BudgetConsolidate } from './lib/ai';
 import { aiPass3QualityAssuranceStreaming } from './lib/ai';
 import { QaFix, Category } from './lib/schemas';
 
+// ----------------------------------- Layout Component -----------------------------------
+
+interface StepLayoutProps {
+  title: string;
+  description?: string;
+  currentStep?: number;
+  totalSteps?: number;
+  progress?: number;
+  showProgress?: boolean;
+  children: React.ReactNode;
+  footer?: React.ReactNode;
+  savedConfig?: Record<string, string>;
+}
+
+const StepLayout: React.FC<StepLayoutProps> = ({
+  title,
+  description,
+  currentStep,
+  totalSteps,
+  progress,
+  showProgress = true,
+  children,
+  footer,
+  savedConfig,
+}) => {
+  const { stdout } = useStdout();
+  const contentWidth = Math.min((stdout?.columns ?? 80) - 4, 100);
+
+  return (
+    <Box flexDirection="column" width={contentWidth}>
+      {/* Header */}
+      <Text color="blue" bold>
+        {title}
+      </Text>
+
+      {/* Step indicator with progress */}
+      {currentStep && totalSteps && (
+        <Box flexDirection="column" marginBottom={2} marginTop={1}>
+          <Box marginBottom={1}>
+            <Text color="cyan" dimColor>
+              Step {currentStep} of {totalSteps}
+            </Text>
+          </Box>
+          {showProgress && progress !== undefined && (
+            <Box flexDirection="column" marginTop={1}>
+              <ProgressBar value={Math.min(100, Math.max(0, progress))} />
+              <Box marginTop={1}>
+                <Text color="gray" dimColor>
+                  {Math.round(progress)}% complete
+                </Text>
+              </Box>
+            </Box>
+          )}
+        </Box>
+      )}
+
+      {/* Description */}
+      {description && (
+        <Box marginBottom={1}>
+          <Text color="gray" dimColor>
+            {description}
+          </Text>
+        </Box>
+      )}
+
+      {/* Progress bar (when no step indicator) */}
+      {showProgress && progress !== undefined && !currentStep && (
+        <Box flexDirection="column" marginTop={1} marginBottom={1}>
+          <ProgressBar value={Math.min(100, Math.max(0, progress))} />
+          <Box marginTop={1}>
+            <Text color="gray" dimColor>
+              {Math.round(progress)}% complete
+            </Text>
+          </Box>
+        </Box>
+      )}
+
+      {/* Content */}
+      <Box marginTop={1}>{children}</Box>
+
+      {/* Saved Configuration Footer */}
+      {savedConfig && Object.keys(savedConfig).length > 0 && (
+        <Box flexDirection="column" marginTop={2}>
+          <Box
+            flexDirection="column"
+            paddingY={1}
+            paddingX={2}
+            borderStyle="single"
+            borderColor="gray"
+          >
+            <Box marginBottom={1}>
+              <Text color="green" bold>
+                ✅ Loaded saved configuration from .constellator/config.json
+              </Text>
+            </Box>
+            <Box marginBottom={1}>
+              <Text color="yellow" bold>
+                📋 Current Configuration:
+              </Text>
+            </Box>
+            {Object.entries(savedConfig).map(([key, value]) => {
+              const configOption = CONFIG_OPTIONS.find(
+                (opt) => opt.key === key
+              );
+              const displayName = configOption?.label || key;
+              const displayValue = key.toLowerCase().includes('token')
+                ? '••••••••'
+                : value;
+              return (
+                <Box key={key} marginBottom={1}>
+                  <Text color="gray">
+                    {'  '}
+                    {displayName}: {displayValue}
+                  </Text>
+                </Box>
+              );
+            })}
+          </Box>
+        </Box>
+      )}
+
+      {/* Additional Footer */}
+      {footer && <Box marginTop={1}>{footer}</Box>}
+    </Box>
+  );
+};
+
 // Configuration options for interactive setup
 interface ConfigOption {
   key: string;
@@ -79,15 +214,15 @@ const ModelSelector: React.FC<{
 }> = ({ onModelSelect, currentValue, onCancel }) => {
   const [availableModels, setAvailableModels] = useState<any[]>([]);
   const [providers, setProviders] = useState<string[]>([]);
-  const [selectedIndex, setSelectedIndex] = useState(0);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectionStep, setSelectionStep] = useState<'provider' | 'model'>(
-    'provider'
-  );
   const { stdout } = useStdout();
   const contentWidth = Math.min((stdout?.columns ?? 80) - 4, 100);
+
+  const getCurrentStep = () => (selectedProvider ? 2 : 1);
+  const getTotalSteps = () => 2;
+  const getProgress = () => (selectedProvider ? 50 : 0);
 
   useEffect(() => {
     const fetchModels = async () => {
@@ -98,11 +233,10 @@ const ModelSelector: React.FC<{
         );
         setAvailableModels(languageModels);
 
-        // Extract unique providers - try different field names
+        // Extract unique providers
         const uniqueProviders = [
           ...new Set(
             languageModels.map((m: any) => {
-              // Try different possible provider field names
               return (
                 m.provider ||
                 m.providerName ||
@@ -114,40 +248,10 @@ const ModelSelector: React.FC<{
           ),
         ].filter((p) => p !== 'Unknown');
 
-        // If no providers found through fields, try extracting from model IDs
-        let finalProviders = uniqueProviders;
-        if (finalProviders.length === 0) {
-          finalProviders = [
-            ...new Set(
-              languageModels.map((m: any) =>
-                m.id && m.id.includes('/') ? m.id.split('/')[0] : 'Unknown'
-              )
-            ),
-          ].filter((p) => p !== 'Unknown');
-        }
+        setProviders(uniqueProviders.sort());
 
-        setProviders(finalProviders.sort());
-
-        // If current model is selected, pre-select its provider but stay in provider selection
-        const currentModel = languageModels.find(
-          (m: any) => m.id === currentValue
-        );
-        if (currentModel) {
-          const currentProvider =
-            currentModel.id && currentModel.id.includes('/')
-              ? currentModel.id.split('/')[0]
-              : 'Unknown';
-          if (
-            currentProvider !== 'Unknown' &&
-            finalProviders.includes(currentProvider)
-          ) {
-            // Pre-select the current provider but stay in provider selection step
-            const providerIndex = finalProviders.indexOf(currentProvider);
-            if (providerIndex >= 0) {
-              setSelectedIndex(providerIndex);
-            }
-          }
-        }
+        // Don't auto-select provider - let user choose
+        // The currentValue is just for reference if they skip to default
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to fetch models');
       } finally {
@@ -159,61 +263,24 @@ const ModelSelector: React.FC<{
   }, [currentValue]);
 
   useInput((input, key) => {
-    if (loading) return;
-
-    if (key.upArrow || input === 'k') {
-      const maxIndex =
-        selectionStep === 'provider'
-          ? providers.length - 1
-          : filteredModels.length - 1;
-      setSelectedIndex((prev) => Math.max(0, prev - 1));
-    } else if (key.downArrow || input === 'j') {
-      const maxIndex =
-        selectionStep === 'provider'
-          ? providers.length - 1
-          : filteredModels.length - 1;
-      setSelectedIndex((prev) => Math.min(maxIndex, prev + 1));
-    } else if (key.return) {
-      if (selectionStep === 'provider') {
-        // Select provider and move to model selection
-        const selectedProviderName = providers[selectedIndex];
-        setSelectedProvider(selectedProviderName || '');
-        setSelectionStep('model');
-        setSelectedIndex(0);
+    if (key.escape) {
+      if (selectedProvider) {
+        // Go back to provider selection
+        setSelectedProvider(null);
       } else {
-        // Select model
-        if (filteredModels[selectedIndex]) {
-          onModelSelect(filteredModels[selectedIndex].id);
-        }
+        // Cancel and go back to configuration
+        onCancel();
       }
-    } else if (
-      (input === 'd' || input === 's') &&
-      selectionStep === 'provider'
-    ) {
-      // Use default model directly from provider selection
+    } else if (key.tab && !selectedProvider) {
+      // Skip to default model directly
       onModelSelect(currentValue);
-    } else if ((input === 'd' || input === 's') && selectionStep === 'model') {
-      // Select default model - check if it's in current filtered list first
-      const defaultModel = filteredModels.find(
-        (m: any) => m.id === currentValue
-      );
-      if (defaultModel) {
-        const defaultIndex = filteredModels.indexOf(defaultModel);
-        setSelectedIndex(defaultIndex);
-        onModelSelect(currentValue);
-      } else {
-        // If default model is not in current provider, just use it directly
-        onModelSelect(currentValue);
-      }
-    } else if (key.escape) {
-      // Always go back to the configuration step, not restart config
-      onCancel();
-    } else if (input === 'b' && selectionStep === 'model') {
-      // Go back to provider selection within model selector
-      setSelectionStep('provider');
-      setSelectedIndex(providers.indexOf(selectedProvider || ''));
     }
   });
+
+  // Helper function to format pricing per million tokens
+  const formatPricePerMillion = (pricePerToken: number): string => {
+    return (pricePerToken * 1000000).toFixed(2);
+  };
 
   // Filter models by selected provider
   const filteredModels = selectedProvider
@@ -228,255 +295,194 @@ const ModelSelector: React.FC<{
       })
     : [];
 
-  // Helper function to format pricing per million tokens
-  const formatPricePerMillion = (pricePerToken: number): string => {
-    return (pricePerToken * 1000000).toFixed(2);
-  };
+  // Create provider options
+  const providerOptions = providers.map((provider) => {
+    const providerModels = availableModels.filter((m: any) => {
+      const modelProvider =
+        m.provider ||
+        m.providerName ||
+        m.company ||
+        m.vendor ||
+        (m.id && m.id.includes('/') ? m.id.split('/')[0] : 'Unknown');
+      return modelProvider === provider;
+    });
+
+    return {
+      label: `${provider} (${providerModels.length} models)`,
+      value: provider,
+    };
+  });
+
+  // Create model options for selected provider
+  const modelOptions = filteredModels.map((model) => {
+    const pricing = model.pricing
+      ? ` ($${formatPricePerMillion(
+          model.pricing.input
+        )}/$${formatPricePerMillion(model.pricing.output)})`
+      : '';
+
+    return {
+      label: `${model.name || model.id}${pricing}`,
+      value: model.id,
+    };
+  });
 
   if (loading) {
     return (
-      <Box flexDirection="column" width={contentWidth}>
-        <Text color="cyan">Loading available models...</Text>
-        <Spinner type="dots" />
-        <Text color="gray" dimColor>
-          Press ESC to return to configuration
-        </Text>
-      </Box>
+      <StepLayout
+        title="🤖 Select AI Model"
+        description="Loading available models..."
+        currentStep={1}
+        totalSteps={2}
+        progress={0}
+      >
+        <StatusMessage variant="info">
+          Loading available models...
+        </StatusMessage>
+        <UiSpinner label="Fetching models" />
+      </StepLayout>
     );
   }
 
   if (error) {
     return (
-      <Box flexDirection="column" width={contentWidth}>
-        <Text color="red">Error loading models: {error}</Text>
-        <Text color="gray">Press ESC to return to configuration</Text>
-      </Box>
+      <StepLayout
+        title="🤖 Select AI Model"
+        description="Failed to load models"
+        currentStep={1}
+        totalSteps={2}
+        progress={0}
+        footer={
+          <Text color="gray" dimColor>
+            Press ESC to return to configuration
+          </Text>
+        }
+      >
+        <Alert variant="error">Failed to load models: {error}</Alert>
+      </StepLayout>
     );
   }
 
   return (
-    <Box flexDirection="column" width={contentWidth}>
-      <Text color="yellow" bold>
-        {selectionStep === 'provider'
-          ? 'Select Provider'
-          : `Select Model from ${selectedProvider}`}
-      </Text>
-      <Text color="gray" dimColor>
-        {selectionStep === 'provider'
-          ? '↑↓ to navigate, ENTER to select, S/D for default (if available), ESC to go back'
-          : '↑↓ to navigate, ENTER to select, S/D for default, ESC to go back, B for providers'}
-      </Text>
-      {selectionStep === 'provider' && (
-        <Text color="cyan" dimColor>
-          💡 Tip: Select your AI provider, then choose your preferred model
+    <StepLayout
+      title="🤖 Select AI Model"
+      description={
+        selectedProvider
+          ? `Select model from ${selectedProvider}`
+          : `Choose your AI provider first (current: ${currentValue})`
+      }
+      currentStep={getCurrentStep()}
+      totalSteps={getTotalSteps()}
+      progress={getProgress()}
+      footer={
+        <Text color="gray" dimColor>
+          {selectedProvider
+            ? `Press ESC to go back to providers • ${modelOptions.length} models available`
+            : `Press ESC to return to configuration • Press TAB to use ${currentValue} • ${providers.length} providers available`}
         </Text>
-      )}
-      {selectionStep === 'model' && (
-        <Text color="cyan" dimColor>
-          💡 Tip: Press S or D to use default model, or browse available models
-        </Text>
-      )}
-      <Newline />
-
-      {selectionStep === 'provider' ? (
+      }
+    >
+      {!selectedProvider ? (
         // Provider Selection
         <Box flexDirection="column">
           <Text color="cyan" bold>
-            Available Providers:
+            Select Provider:
           </Text>
-          {providers.map((provider, index) => {
-            const providerModels = availableModels.filter((m: any) => {
-              const modelProvider =
-                m.provider ||
-                m.providerName ||
-                m.company ||
-                m.vendor ||
-                (m.id && m.id.includes('/') ? m.id.split('/')[0] : 'Unknown');
-              return modelProvider === provider;
-            });
-            return (
-              <Text
-                key={provider}
-                color={index === selectedIndex ? 'green' : 'gray'}
-              >
-                {index === selectedIndex ? '→ ' : '  '}
-                {provider} ({providerModels.length} models)
-              </Text>
-            );
-          })}
+          <Newline />
+          <Select
+            options={providerOptions}
+            onChange={(value) => setSelectedProvider(value)}
+          />
         </Box>
       ) : (
         // Model Selection
-        <>
-          {filteredModels[selectedIndex] && (
-            <Box flexDirection="column" paddingX={2} marginBottom={1}>
-              <Text color="green" bold>
-                {filteredModels[selectedIndex].name ||
-                  filteredModels[selectedIndex].id}
-              </Text>
-              {filteredModels[selectedIndex].description && (
-                <Text color="gray" dimColor>
-                  {filteredModels[selectedIndex].description}
-                </Text>
-              )}
-              {filteredModels[selectedIndex].pricing && (
-                <Box flexDirection="column" marginTop={1}>
-                  <Text color="cyan" bold>
-                    Pricing (per million tokens):
-                  </Text>
-                  <Text color="white">
-                    Input: $
-                    {formatPricePerMillion(
-                      filteredModels[selectedIndex].pricing.input
-                    )}
-                  </Text>
-                  <Text color="white">
-                    Output: $
-                    {formatPricePerMillion(
-                      filteredModels[selectedIndex].pricing.output
-                    )}
-                  </Text>
-                  {filteredModels[selectedIndex].pricing.cachedInputTokens && (
-                    <Text color="white">
-                      Cached Input: $
-                      {formatPricePerMillion(
-                        filteredModels[selectedIndex].pricing.cachedInputTokens
-                      )}
-                    </Text>
-                  )}
-                  {filteredModels[selectedIndex].pricing
-                    .cacheCreationInputTokens && (
-                    <Text color="white">
-                      Cache Creation: $
-                      {formatPricePerMillion(
-                        filteredModels[selectedIndex].pricing
-                          .cacheCreationInputTokens
-                      )}
-                    </Text>
-                  )}
-                </Box>
-              )}
-            </Box>
-          )}
-
-          <Box flexDirection="column" marginTop={1}>
-            <Text color="cyan" bold>
-              Models from {selectedProvider}:
-            </Text>
-            {filteredModels.map((model, index) => (
-              <Text
-                key={model.id}
-                color={index === selectedIndex ? 'green' : 'gray'}
-              >
-                {index === selectedIndex ? '→ ' : '  '}
-                {model.name || model.id}
-                {model.pricing && (
-                  <Text color="magenta">
-                    {' '}
-                    (${formatPricePerMillion(model.pricing.input)}/$
-                    {formatPricePerMillion(model.pricing.output)})
-                  </Text>
-                )}
-              </Text>
-            ))}
-          </Box>
-        </>
+        <Box flexDirection="column">
+          <Text color="cyan" bold>
+            Select Model from {selectedProvider}:
+          </Text>
+          <Newline />
+          <Select
+            options={modelOptions}
+            onChange={(value) => onModelSelect(value)}
+          />
+        </Box>
       )}
-    </Box>
+    </StepLayout>
   );
 };
 
 // Interactive Configuration Component
 const InteractiveConfigApp: React.FC<{
   onConfigComplete: (config: Record<string, string>) => void;
-}> = ({ onConfigComplete }) => {
+  savedConfig?: Record<string, string>;
+}> = ({ onConfigComplete, savedConfig }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [configValues, setConfigValues] = useState<Record<string, string>>({});
   const [inputValue, setInputValue] = useState('');
-  const [showInput, setShowInput] = useState(false);
   const [showModelSelector, setShowModelSelector] = useState(false);
-  const { stdout } = useStdout();
-  const contentWidth = Math.min((stdout?.columns ?? 80) - 4, 100);
 
   const currentOption = CONFIG_OPTIONS[currentIndex];
 
   // Guard against invalid index
   if (!currentOption) {
     return (
-      <Box flexDirection="column" width={contentWidth}>
-        <Text color="red">Error: Invalid configuration option index</Text>
-      </Box>
+      <StepLayout title="⚙️ Constellator Configuration Setup">
+        <Alert variant="error">Invalid configuration option index</Alert>
+      </StepLayout>
     );
   }
 
+  const progress = ((currentIndex + 1) / CONFIG_OPTIONS.length) * 100;
+
+  const handleNext = (value: string) => {
+    const newConfig = {
+      ...configValues,
+      [currentOption.key]: value || currentOption.defaultValue,
+    };
+    setConfigValues(newConfig);
+    setInputValue('');
+
+    if (currentIndex < CONFIG_OPTIONS.length - 1) {
+      setCurrentIndex(currentIndex + 1);
+    } else {
+      // Configuration complete
+      onConfigComplete(newConfig);
+    }
+  };
+
+  const handleSkip = () => {
+    const newConfig = {
+      ...configValues,
+      [currentOption.key]: currentOption.defaultValue,
+    };
+    setConfigValues(newConfig);
+
+    if (currentIndex < CONFIG_OPTIONS.length - 1) {
+      setCurrentIndex(currentIndex + 1);
+    } else {
+      onConfigComplete(newConfig);
+    }
+  };
+
   useInput((input, key) => {
-    if (key.return) {
-      if (currentOption.type === 'model-select' && !showInput) {
-        setShowModelSelector(true);
-      } else if (showInput) {
-        // Save current input and move to next
-        const newConfig = {
-          ...configValues,
-          [currentOption.key]: inputValue || currentOption.defaultValue,
-        };
-        setConfigValues(newConfig);
-        setInputValue('');
-
-        if (currentIndex < CONFIG_OPTIONS.length - 1) {
-          setCurrentIndex(currentIndex + 1);
-          setShowInput(false);
-        } else {
-          // Configuration complete
-          onConfigComplete(newConfig);
-        }
-      } else {
-        setShowInput(true);
-        setInputValue(currentOption.defaultValue);
-      }
-    } else if (input === 's' && !showInput) {
+    if (key.tab) {
       // Skip to default for any option
-      const newConfig = {
-        ...configValues,
-        [currentOption.key]: currentOption.defaultValue,
-      };
-      setConfigValues(newConfig);
-
-      if (currentIndex < CONFIG_OPTIONS.length - 1) {
-        setCurrentIndex(currentIndex + 1);
-        setShowInput(false);
-      } else {
-        onConfigComplete(newConfig);
-      }
-    } else if (key.escape) {
+      handleSkip();
+    } else if (key.escape && currentIndex > 0) {
       // Go back to previous option
-      if (currentIndex > 0) {
-        setCurrentIndex(currentIndex - 1);
-        setShowInput(false);
-        setShowModelSelector(false);
-        setInputValue('');
-      }
+      setCurrentIndex(currentIndex - 1);
+      setShowModelSelector(false);
+      setInputValue('');
     }
   });
-
-  const progress = ((currentIndex + 1) / CONFIG_OPTIONS.length) * 100;
 
   // Show model selector if active
   if (showModelSelector && currentOption.type === 'model-select') {
     return (
       <ModelSelector
         onModelSelect={(modelId) => {
-          const newConfig = {
-            ...configValues,
-            [currentOption.key]: modelId,
-          };
-          setConfigValues(newConfig);
+          handleNext(modelId);
           setShowModelSelector(false);
-
-          if (currentIndex < CONFIG_OPTIONS.length - 1) {
-            setCurrentIndex(currentIndex + 1);
-          } else {
-            onConfigComplete(newConfig);
-          }
         }}
         currentValue={
           configValues[currentOption.key] || currentOption.defaultValue
@@ -487,24 +493,18 @@ const InteractiveConfigApp: React.FC<{
   }
 
   return (
-    <Box flexDirection="column" width={contentWidth}>
-      <Text color="blue" bold>
-        ⚙️ Constellator Configuration Setup
-      </Text>
-      <Newline />
-
-      <Box flexDirection="column" marginBottom={1}>
-        <Text color="cyan">
-          Progress: {currentIndex + 1} of {CONFIG_OPTIONS.length} settings
-        </Text>
-        <Text color="green">
-          █{'█'.repeat(Math.floor(progress / 5))}
-          {'░'.repeat(20 - Math.floor(progress / 5))} {Math.round(progress)}%
-        </Text>
-      </Box>
-
-      <Newline />
-
+    <StepLayout
+      title="⚙️ Constellator Configuration Setup"
+      currentStep={currentIndex + 1}
+      totalSteps={CONFIG_OPTIONS.length}
+      progress={progress}
+      savedConfig={savedConfig}
+      footer={
+        <StatusMessage variant="info">
+          Tip: You can re-run this setup anytime with 'constellator config'
+        </StatusMessage>
+      }
+    >
       <Box flexDirection="column" paddingX={2}>
         <Text color="yellow" bold>
           {currentOption.label}
@@ -514,45 +514,53 @@ const InteractiveConfigApp: React.FC<{
         </Text>
         <Newline />
 
-        {!showInput ? (
+        <Box flexDirection="column" marginBottom={1}>
+          <Text color="green">
+            Current value:{' '}
+            {currentOption.isSecret
+              ? '••••••••'
+              : configValues[currentOption.key] || currentOption.defaultValue}
+          </Text>
+        </Box>
+
+        {currentOption.type === 'model-select' ? (
           <Box flexDirection="column">
-            <Text color="green">
-              Current:{' '}
-              {currentOption.isSecret
-                ? '••••••••'
-                : configValues[currentOption.key] || currentOption.defaultValue}
-            </Text>
-            <Newline />
-            <Text color="cyan">
-              {currentOption.type === 'model-select'
-                ? 'Press ENTER to browse models • Press S to use default • ESC to go back'
-                : 'Press ENTER to customize • Press S to use default • ESC to go back'}
+            <Box marginBottom={1}>
+              <Text color="cyan">Choose your AI model:</Text>
+            </Box>
+            <Box marginBottom={1}>
+              <TextInput
+                value=""
+                onChange={() => {}}
+                placeholder="Press ENTER to browse models..."
+                onSubmit={() => setShowModelSelector(true)}
+              />
+            </Box>
+            <Text color="gray" dimColor>
+              Press ENTER to select model • Press TAB to use default • ESC to go
+              back
             </Text>
           </Box>
         ) : (
           <Box flexDirection="column">
-            <Text color="cyan">Enter value (or press ENTER for default):</Text>
-            <Box>
-              <Text color="green">{'> '}</Text>
+            <Box marginBottom={1}>
+              <Text color="cyan">Enter new value:</Text>
+            </Box>
+            <Box marginBottom={1}>
               <TextInput
                 value={inputValue}
                 onChange={setInputValue}
-                mask={currentOption.isSecret ? '*' : undefined}
                 placeholder={currentOption.defaultValue}
+                onSubmit={handleNext}
               />
             </Box>
             <Text color="gray" dimColor>
-              Press ENTER to confirm
+              Press ENTER to confirm • Press TAB to use default • ESC to go back
             </Text>
           </Box>
         )}
       </Box>
-
-      <Newline />
-      <Text color="gray" dimColor>
-        Tip: You can re-run this setup anytime with 'constellator config'
-      </Text>
-    </Box>
+    </StepLayout>
   );
 };
 
@@ -732,24 +740,6 @@ function renderReadme(
   return lines.join('\n');
 }
 
-const ProgressBar: React.FC<{
-  current: number;
-  total: number;
-  width?: number;
-}> = ({ current, total, width = 30 }) => {
-  const pct = Math.min(100, Math.max(0, Math.round((current / total) * 100)));
-  const filled = Math.min(
-    width,
-    Math.max(0, Math.round((current / total) * width))
-  );
-  const bar = '█'.repeat(filled) + '░'.repeat(Math.max(0, width - filled));
-  return (
-    <Text color="cyan">
-      {bar} {pct}% ({current}/{total})
-    </Text>
-  );
-};
-
 type ProcessedRepo = {
   repo: StarredRepo;
   details?: DetailedRepo;
@@ -772,8 +762,6 @@ const StarFetchingApp: React.FC<{
   const [currentBatch, setCurrentBatch] = useState(0);
   const [recentStars, setRecentStars] = useState<StarredRepo[]>([]);
   const [isComplete, setIsComplete] = useState(false);
-  const { stdout } = useStdout();
-  const contentWidth = Math.min((stdout?.columns ?? 80) - 4, 100);
 
   // Handle keyboard input for quitting
   useInput((input, key) => {
@@ -861,76 +849,137 @@ const StarFetchingApp: React.FC<{
     fetchStarsWithProgress();
   }, [token, maxRepos, onStarsFetched]);
 
-  return (
-    <Box flexDirection="column" width={contentWidth}>
-      <Text color="blue" bold>
-        ⭐ Constellator – Fetching {username ? `@${username}'s ` : 'Your '}
-        Starred Repositories
-      </Text>
-      <Newline />
+  const getTitle = () => {
+    const phaseTitles = {
+      connecting: '⭐ Constellator – Connecting to GitHub',
+      fetching: `⭐ Constellator – Fetching ${
+        username ? `@${username}'s ` : 'Your '
+      }Starred Repositories`,
+      complete: '⭐ Constellator – Repository Fetch Complete',
+    };
+    return phaseTitles[fetchingPhase];
+  };
 
-      {fetchingPhase === 'connecting' && (
-        <>
-          <Text color="cyan">🔗 Connecting to GitHub...</Text>
-          <Newline />
-          <Spinner type="dots" />
-        </>
-      )}
+  const getDescription = () => {
+    const phaseDescriptions = {
+      connecting: 'Establishing connection to GitHub API',
+      fetching: 'Downloading your starred repositories',
+      complete: 'Repository data successfully retrieved',
+    };
+    return phaseDescriptions[fetchingPhase];
+  };
 
-      {fetchingPhase === 'fetching' && (
-        <>
-          <Text color="cyan">
-            📥 Fetching starred repositories from GitHub...
-          </Text>
-          <Newline />
+  const getProgress = () => {
+    if (fetchingPhase === 'complete') return 100;
+    if (fetchingPhase === 'connecting') return 0;
+    if (starsFetched > 0 && totalStars > 0) {
+      return Math.min(
+        100,
+        (starsFetched / Math.max(totalStars, maxRepos)) * 100
+      );
+    }
+    return Math.min(100, (currentBatch % 10) * 10);
+  };
 
-          <Box flexDirection="column" marginBottom={1}>
-            <Text color="yellow">
-              Progress: {starsFetched} repositories fetched
-              {isComplete &&
-                starsFetched >= maxRepos &&
-                ` (limit reached: ${maxRepos})`}
-              {isComplete && starsFetched < maxRepos && ' (complete)'}
+  const getCurrentStep = () => {
+    if (fetchingPhase === 'connecting') return 1;
+    if (fetchingPhase === 'fetching') return 2;
+    return 3;
+  };
+
+  const getTotalSteps = () => 3;
+
+  const getFooter = () => {
+    if (fetchingPhase === 'fetching') {
+      return (
+        <Text color="gray" dimColor>
+          Batch {currentBatch} • Press Q to quit
+        </Text>
+      );
+    }
+    return null;
+  };
+
+  const getContent = () => {
+    switch (fetchingPhase) {
+      case 'connecting':
+        return (
+          <>
+            <StatusMessage variant="info">
+              Connecting to GitHub...
+            </StatusMessage>
+            <UiSpinner label="Connecting" />
+          </>
+        );
+
+      case 'fetching':
+        return (
+          <>
+            <Text color="cyan">
+              📥 Fetching starred repositories from GitHub...
             </Text>
+            <Newline />
 
-            <ProgressBar
-              current={isComplete ? 10 : currentBatch % 10} // Show full progress when complete
-              total={10} // Keep it simple and animated
-              width={Math.min(40, contentWidth - 10)}
-            />
-          </Box>
-
-          <Text color="gray" dimColor>
-            Batch {currentBatch} • Press Q to quit
-          </Text>
-
-          {recentStars.length > 0 && (
-            <Box flexDirection="column" marginTop={1}>
-              <Text color="cyan" bold>
-                Latest repositories:
+            <Box flexDirection="column" marginBottom={1}>
+              <Text color="yellow">
+                Progress: {starsFetched} repositories fetched
+                {isComplete &&
+                  starsFetched >= maxRepos &&
+                  ` (limit reached: ${maxRepos})`}
+                {isComplete && starsFetched < maxRepos && ' (complete)'}
               </Text>
-              {recentStars.map((star, idx) => (
-                <Text key={idx} color="green">
-                  • {star.full_name} ({star.stargazers_count} ⭐)
-                </Text>
-              ))}
             </Box>
-          )}
-        </>
-      )}
 
-      {fetchingPhase === 'complete' && (
-        <>
-          <Text color="green">
-            ✅ Found {starsFetched} starred repositories
-            {starsFetched >= maxRepos ? ` (limited to ${maxRepos})` : ''}!
-          </Text>
-          <Newline />
-          <Text color="cyan">🚀 Starting AI processing...</Text>
-          <Spinner type="dots" />
-        </>
-      )}
-    </Box>
+            {recentStars.length > 0 && (
+              <Box flexDirection="column" marginTop={1}>
+                <Text color="cyan" bold>
+                  Latest repositories:
+                </Text>
+                <UnorderedList>
+                  {recentStars.map((star, idx) => (
+                    <UnorderedList.Item key={idx}>
+                      <Text color="green">
+                        {star.full_name} ({star.stargazers_count} ⭐)
+                      </Text>
+                    </UnorderedList.Item>
+                  ))}
+                </UnorderedList>
+              </Box>
+            )}
+          </>
+        );
+
+      case 'complete':
+        return (
+          <>
+            <StatusMessage variant="success">
+              Found {starsFetched} starred repositories
+              {starsFetched >= maxRepos ? ` (limited to ${maxRepos})` : ''}!
+            </StatusMessage>
+            <Newline />
+            <StatusMessage variant="info">
+              Starting AI processing...
+            </StatusMessage>
+            <UiSpinner label="Processing" />
+          </>
+        );
+
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <StepLayout
+      title={getTitle()}
+      description={getDescription()}
+      currentStep={getCurrentStep()}
+      totalSteps={getTotalSteps()}
+      progress={getProgress()}
+      footer={getFooter()}
+    >
+      {getContent()}
+    </StepLayout>
   );
 };
 
@@ -957,14 +1006,16 @@ const ConstellateStreamingApp: React.FC<{
   const [allBatchesData, setAllBatchesData] = useState<any[]>([]);
   const [selectedBatchIndex, setSelectedBatchIndex] = useState(0);
   const [features, setFeatures] = useState<RepoFeature[]>([]);
-  const { stdout } = useStdout();
-  const contentWidth = Math.min((stdout?.columns ?? 80) - 4, 100);
 
   useInput((input, key) => {
     if (currentPhase === 'complete') {
       if (input === 'q') process.exit(0);
-    } else if (currentPhase === 'ai-processing' && allBatchesData.length > 0) {
-      // Allow panning between batches during AI processing
+    } else if (
+      currentPhase === 'ai-processing' &&
+      allBatchesData.length > 0 &&
+      aiPhase !== 'pass1'
+    ) {
+      // Allow panning between batches during AI processing (except Pass-1)
       if (key.leftArrow || input === 'h') {
         setSelectedBatchIndex((prev) => Math.max(0, prev - 1));
       } else if (key.rightArrow || input === 'l') {
@@ -1028,11 +1079,16 @@ const ConstellateStreamingApp: React.FC<{
           let finalFactsResult: any = null;
 
           for await (const partialResult of factsStreamingGenerator) {
-            // Update streaming data for UI
-            setStreamingData({
-              phase: 'pass0',
-              partialResult,
-              factsCount: partialResult?.results?.length || 0,
+            // Update streaming data for UI - accumulate total processed count
+            setStreamingData((prevData: any) => {
+              const currentBatchCount = partialResult?.results?.length || 0;
+              const previousTotal = prevData?.totalProcessed || 0;
+              return {
+                phase: 'pass0',
+                partialResult,
+                factsCount: currentBatchCount,
+                totalProcessed: previousTotal + currentBatchCount,
+              };
             });
             // Always update final result with the latest partial
             finalFactsResult = partialResult as any;
@@ -1444,19 +1500,102 @@ const ConstellateStreamingApp: React.FC<{
     processEverything();
   }, [stars, maxRepos, token, onFinish]);
 
+  // Helper functions for rendering different phases
+  const getPhaseInfo = () => {
+    const phaseInfo = {
+      fetching: {
+        title: '🚀 Constellator – Fetching Repository Data',
+        description: 'Downloading repository details and READMEs',
+        progress: Math.min(
+          100,
+          Math.max(0, Math.round((currentStep / totalSteps) * 100))
+        ),
+      },
+      'ai-processing': {
+        title: '🤖 Constellator – AI Processing',
+        description: 'Processing repositories with AI',
+        progress: undefined,
+      },
+      complete: {
+        title: '🎉 Constellator – Processing Complete!',
+        description: 'All processing complete successfully',
+        progress: 100,
+      },
+    };
+
+    const current = phaseInfo[currentPhase];
+
+    // Customize AI processing title and description based on current phase
+    if (currentPhase === 'ai-processing' && aiPhase) {
+      const phaseNames = {
+        pass0: 'Facts Extraction',
+        pass1: 'Category Analysis',
+        pass2: 'Streamlining',
+        pass3: 'Quality Assurance',
+      };
+      const descriptions = {
+        pass0: 'Extracting factual signals from repository READMEs',
+        pass1: 'Analyzing repositories and creating categories',
+        pass2: 'Streamlining and organizing categories',
+        pass3: 'Final quality assurance and optimization',
+      };
+
+      current.title = `🤖 Constellator – ${phaseNames[aiPhase]}`;
+      current.description = descriptions[aiPhase];
+    }
+
+    return current;
+  };
+
+  const getTitle = () => getPhaseInfo().title;
+  const getDescription = () => getPhaseInfo().description;
+  const getProgress = () => getPhaseInfo().progress;
+
+  const getCurrentStep = () => {
+    if (currentPhase === 'fetching') return 1;
+    if (currentPhase === 'ai-processing') return 2;
+    return 3;
+  };
+
+  const getTotalSteps = () => 3;
+
+  // Helper function to render repository facts
+  const renderRepositoryFacts = (results: any[]) => {
+    if (!results || results.length === 0) return null;
+
+    return (
+      <Box flexDirection="column" paddingLeft={2} marginTop={1}>
+        <Text color="cyan" bold>
+          Latest Facts Extracted:
+        </Text>
+        {results.slice(-3).map((result: any, idx: number) => (
+          <Box key={idx} flexDirection="column" paddingLeft={2}>
+            <Text color="magenta" bold>
+              • {result.id?.split('/').pop() || 'Unknown'}
+            </Text>
+            <Text color="gray">
+              Purpose: {result.purpose?.slice(0, 50) || 'None'}...
+            </Text>
+            <Text color="gray">
+              Capabilities: {(result.capabilities || []).slice(0, 2).join(', ')}
+              {(result.capabilities || []).length > 2 ? '...' : ''}
+            </Text>
+          </Box>
+        ))}
+      </Box>
+    );
+  };
+
   // Render different UI based on current phase
   if (currentPhase === 'fetching') {
     return (
-      <Box flexDirection="column" width={contentWidth}>
-        <Text color="blue" bold>
-          🚀 Constellator – Fetching Repository Data
-        </Text>
-        <Newline />
-        <ProgressBar
-          current={currentStep}
-          total={totalSteps}
-          width={Math.min(40, contentWidth - 10)}
-        />
+      <StepLayout
+        title={getTitle()}
+        description={getDescription()}
+        currentStep={getCurrentStep()}
+        totalSteps={getTotalSteps()}
+        progress={getProgress()}
+      >
         {processedRepos.slice(-3).map((p, i) => (
           <Box key={i}>
             <Text color="green">{p.repo.full_name}</Text>
@@ -1467,118 +1606,120 @@ const ConstellateStreamingApp: React.FC<{
         ))}
         {currentStep < totalSteps && (
           <Box>
-            <Spinner type="dots" />
-            <Text color="cyan">
-              {' '}
-              Processing: {stars[currentStep]?.full_name}
-            </Text>
+            <UiSpinner label={`Processing: ${stars[currentStep]?.full_name}`} />
           </Box>
         )}
-      </Box>
+      </StepLayout>
     );
   }
 
   if (currentPhase === 'ai-processing') {
-    const currentBatchData = allBatchesData[selectedBatchIndex];
+    // For Pass-1, always show the current processing batch, not allow navigation
+    const batchIndex =
+      aiPhase === 'pass1' ? currentBatch - 1 : selectedBatchIndex;
+    const currentBatchData = allBatchesData[batchIndex];
     const isViewingCurrentBatch = selectedBatchIndex === currentBatch - 1;
 
-    return (
-      <Box flexDirection="column" width={contentWidth}>
-        <Text color="blue" bold>
-          🤖 Constellator – AI Processing Phase{' '}
-          {aiPhase === 'pass0' ? 'PASS-0 (Facts)' : aiPhase?.toUpperCase()}
-        </Text>
-        <Newline />
-
-        {/* Batch Navigation - only show for Pass 1 */}
-        {allBatchesData.length > 1 && aiPhase === 'pass1' && (
-          <Box justifyContent="space-between" marginBottom={1}>
-            <Text color="cyan">
-              ←/h Prev • Batch {selectedBatchIndex + 1}/{allBatchesData.length}{' '}
-              • Next →/l
-            </Text>
-            <Text color="gray" dimColor>
-              {isViewingCurrentBatch ? '🔴 Live' : '⚪ Past'}
-            </Text>
+    const getFooter = () => {
+      if (allBatchesData.length > 1 && aiPhase === 'pass1') {
+        return (
+          <Box flexDirection="column">
+            {isViewingCurrentBatch && totalBatches > 0 && (
+              <UiSpinner
+                label={`Processing batch ${currentBatch} of ${totalBatches}`}
+              />
+            )}
+            {!isViewingCurrentBatch && totalBatches > 0 && (
+              <Text color="gray" dimColor>
+                Viewing completed batch {selectedBatchIndex + 1} of{' '}
+                {totalBatches}
+              </Text>
+            )}
           </Box>
-        )}
+        );
+      }
+      return null;
+    };
 
+    return (
+      <StepLayout
+        title={getTitle()}
+        description={getDescription()}
+        currentStep={getCurrentStep()}
+        totalSteps={getTotalSteps()}
+        footer={getFooter()}
+      >
         {aiPhase === 'pass0' && (
-          <>
-            <Text color="cyan">
-              Pass-0: Extracting factual signals from repository READMEs
-            </Text>
-            <Newline />
-            {streamingData && streamingData.phase === 'pass0' && (
-              <Box flexDirection="column">
-                <Text color="yellow" bold>
-                  🔴 Live Facts Extraction:
+          <Box flexDirection="column">
+            <Box marginBottom={2}>
+              <Text color="cyan">
+                Pass-0: Extracting factual signals from repository READMEs
+              </Text>
+            </Box>
+
+            {/* Progress Bar */}
+            <Box flexDirection="column" marginTop={1} marginBottom={1}>
+              <ProgressBar
+                value={
+                  streamingData?.totalProcessed
+                    ? (streamingData.totalProcessed / features.length) * 100
+                    : 0
+                }
+              />
+              <Box marginTop={1}>
+                <Text color="gray" dimColor>
+                  {streamingData?.totalProcessed || 0} of {features.length}{' '}
+                  repositories processed
                 </Text>
-                <Box flexDirection="column" paddingLeft={2}>
-                  <Text color="green">
-                    Repositories Processed: {streamingData.factsCount || 0}
+              </Box>
+            </Box>
+
+            {/* Facts Extraction */}
+            {streamingData && streamingData.phase === 'pass0' && (
+              <Box flexDirection="column" marginTop={1}>
+                <Box marginBottom={1}>
+                  <Text color="yellow" bold>
+                    🔴 Facts Extraction:
                   </Text>
                 </Box>
-                {streamingData.partialResult?.results &&
-                  streamingData.partialResult.results.length > 0 && (
-                    <Box flexDirection="column" paddingLeft={2} marginTop={1}>
-                      <Text color="cyan" bold>
-                        Latest Facts Extracted:
-                      </Text>
-                      {streamingData.partialResult.results
-                        .slice(-3) // Show last 3 results
-                        .map((result: any, idx: number) => (
-                          <Box key={idx} flexDirection="column" paddingLeft={2}>
-                            <Text color="magenta" bold>
-                              • {result.id?.split('/').pop() || 'Unknown'}
-                            </Text>
-                            <Text color="gray">
-                              Purpose: {result.purpose?.slice(0, 50) || 'None'}
-                              ...
-                            </Text>
-                            <Text color="gray">
-                              Capabilities:{' '}
-                              {(result.capabilities || [])
-                                .slice(0, 2)
-                                .join(', ')}
-                              {(result.capabilities || []).length > 2
-                                ? '...'
-                                : ''}
-                            </Text>
-                          </Box>
-                        ))}
-                    </Box>
-                  )}
+                <Box paddingLeft={2} marginBottom={1}>
+                  <Text color="green">
+                    Current batch: {streamingData.factsCount || 0} repositories
+                  </Text>
+                </Box>
+                {renderRepositoryFacts(streamingData.partialResult?.results)}
               </Box>
             )}
+
+            {/* Initial loading message */}
             {!streamingData || streamingData.phase !== 'pass0' ? (
               <Text color="green">
                 Processing {features.length} repositories for facts
                 extraction...
               </Text>
             ) : null}
-          </>
+          </Box>
         )}
 
         {aiPhase === 'pass1' && currentBatchData && (
-          <>
+          <Box flexDirection="column">
             <Text color="cyan">
               Batch {currentBatchData.batchNumber}: Analyzing{' '}
               {currentBatchData.repositories.length} repositories
             </Text>
-            <Newline />
 
             {/* Repository List */}
-            <Box flexDirection="column" marginBottom={1}>
-              <Text color="yellow" bold>
-                Repositories in this batch:
-              </Text>
+            <Box flexDirection="column" marginTop={2}>
+              <Box marginBottom={1}>
+                <Text color="yellow" bold>
+                  Repositories in this batch:
+                </Text>
+              </Box>
               {currentBatchData.repositories
                 .slice(0, 5)
                 .map((repo: any, idx: number) => (
                   <Text key={idx} color="gray">
-                    • {repo.name} ({repo.language || 'Unknown'}, {repo.stars}{' '}
-                    ⭐)
+                    • {repo.name} ({repo.language || 'Unknown'}, {repo.stars})
                   </Text>
                 ))}
               {currentBatchData.repositories.length > 5 && (
@@ -1588,23 +1729,27 @@ const ConstellateStreamingApp: React.FC<{
               )}
             </Box>
 
-            {/* Live Streaming Data */}
-            {isViewingCurrentBatch && streamingData && (
-              <Box flexDirection="column">
-                <Text color="yellow" bold>
-                  🔴 Live AI Analysis:
-                </Text>
+            {/* Analysis Progress */}
+            {streamingData && streamingData.phase === 'pass1' && (
+              <Box flexDirection="column" marginTop={2}>
+                <Box marginBottom={1}>
+                  <Text color="yellow" bold>
+                    🔄 Analysis Progress:
+                  </Text>
+                </Box>
 
                 {/* Current Progress */}
-                <Box flexDirection="column" paddingLeft={2}>
+                <Box paddingLeft={2} marginBottom={1} gap={4}>
                   <Text color="green">
                     Categories:{' '}
                     {streamingData.partialResult?.categories?.length || 0}
                   </Text>
+                  <Newline />
                   <Text color="green">
                     Summaries:{' '}
                     {streamingData.partialResult?.summaries?.length || 0}
                   </Text>
+                  <Newline />
                   <Text color="green">
                     Assignments:{' '}
                     {streamingData.partialResult?.assignments?.length || 0}
@@ -1615,9 +1760,11 @@ const ConstellateStreamingApp: React.FC<{
                 {streamingData.partialResult?.categories &&
                   streamingData.partialResult.categories.length > 0 && (
                     <Box flexDirection="column" paddingLeft={2} marginTop={1}>
-                      <Text color="cyan" bold>
-                        Latest Categories:
-                      </Text>
+                      <Box marginBottom={1}>
+                        <Text color="cyan" bold>
+                          Latest Categories:
+                        </Text>
+                      </Box>
                       {streamingData.partialResult.categories
                         .slice(-3) // Show last 3 categories
                         .map((cat: any, idx: number) => (
@@ -1639,9 +1786,11 @@ const ConstellateStreamingApp: React.FC<{
                 {streamingData.partialResult?.summaries &&
                   streamingData.partialResult.summaries.length > 0 && (
                     <Box flexDirection="column" paddingLeft={2} marginTop={1}>
-                      <Text color="cyan" bold>
-                        Latest Summaries:
-                      </Text>
+                      <Box marginBottom={1}>
+                        <Text color="cyan" bold>
+                          Latest Summaries:
+                        </Text>
+                      </Box>
                       {streamingData.partialResult.summaries
                         .slice(-2) // Show last 2 summaries
                         .filter(
@@ -1664,73 +1813,43 @@ const ConstellateStreamingApp: React.FC<{
                   )}
               </Box>
             )}
-
-            {/* Historical Batch Data */}
-            {!isViewingCurrentBatch &&
-              currentBatchData.streamingHistory.length > 0 && (
-                <Box flexDirection="column">
-                  <Text color="yellow" bold>
-                    ⚪ Completed Analysis:
-                  </Text>
-
-                  <Box flexDirection="column" paddingLeft={2}>
-                    <Text color="green">
-                      Final Categories:{' '}
-                      {currentBatchData.finalResult?.categories?.length || 0}
-                    </Text>
-                    <Text color="green">
-                      Final Summaries:{' '}
-                      {currentBatchData.finalResult?.summaries?.length || 0}
-                    </Text>
-                  </Box>
-
-                  {/* Show final results for completed batches */}
-                  {currentBatchData.finalResult?.categories && (
-                    <Box flexDirection="column" paddingLeft={2} marginTop={1}>
-                      <Text color="cyan" bold>
-                        Categories Created:
-                      </Text>
-                      {currentBatchData.finalResult.categories
-                        .slice(0, 5)
-                        .map((cat: any, idx: number) => (
-                          <Text key={idx} color="blue">
-                            • {cat.title}
-                          </Text>
-                        ))}
-                    </Box>
-                  )}
-                </Box>
-              )}
-          </>
+          </Box>
         )}
 
         {aiPhase === 'pass2' && (
-          <>
-            <Text color="cyan">
-              Pass 2: Streamlining categories and assignments
-            </Text>
-            <Newline />
+          <Box flexDirection="column">
+            <Box marginBottom={2}>
+              <Text color="cyan">
+                Pass 2: Streamlining categories and assignments
+              </Text>
+            </Box>
             {streamingData && (
-              <Box flexDirection="column">
-                <Text color="yellow" bold>
-                  🔄 Live Streamlining:
-                </Text>
-                <Box flexDirection="column" paddingLeft={2}>
+              <Box flexDirection="column" marginTop={1}>
+                <Box marginBottom={1}>
+                  <Text color="yellow" bold>
+                    🔄 Streamlining:
+                  </Text>
+                </Box>
+                <Box paddingLeft={2} marginBottom={1} gap={4}>
                   <Text color="green">
                     Categories: {streamingData.categoriesCount || 0}
                   </Text>
+                  <Newline />
                   <Text color="green">
                     Aliases: {streamingData.aliasesCount || 0}
                   </Text>
+                  <Newline />
                   <Text color="green">
                     Repos Assigned: {streamingData.reposCount || 0}
                   </Text>
                 </Box>
                 {streamingData.partialResult?.categories && (
                   <Box flexDirection="column" paddingLeft={2} marginTop={1}>
-                    <Text color="cyan" bold>
-                      Categories Being Streamlined:
-                    </Text>
+                    <Box marginBottom={1}>
+                      <Text color="cyan" bold>
+                        Categories Being Streamlined:
+                      </Text>
+                    </Box>
                     {streamingData.partialResult.categories
                       .slice(0, 5)
                       .map((cat: any, idx: number) => (
@@ -1742,28 +1861,36 @@ const ConstellateStreamingApp: React.FC<{
                 )}
               </Box>
             )}
-          </>
+          </Box>
         )}
 
         {aiPhase === 'pass3' && (
-          <>
-            <Text color="cyan">Pass 3: Quality assurance and optimization</Text>
-            <Newline />
+          <Box flexDirection="column">
+            <Box marginBottom={2}>
+              <Text color="cyan">
+                Pass 3: Quality assurance and optimization
+              </Text>
+            </Box>
             {streamingData && (
-              <Box flexDirection="column">
-                <Text color="yellow" bold>
-                  🔍 Live QA Analysis:
-                </Text>
-                <Box flexDirection="column" paddingLeft={2}>
+              <Box flexDirection="column" marginTop={1}>
+                <Box marginBottom={1}>
+                  <Text color="yellow" bold>
+                    🔍 QA Analysis:
+                  </Text>
+                </Box>
+                <Box paddingLeft={2} marginBottom={1} gap={4}>
                   <Text color="green">
                     Categories Analyzed: {streamingData.categoriesCount || 0}
                   </Text>
+                  <Newline />
                   <Text color="green">
                     Aliases Found: {streamingData.aliasesCount || 0}
                   </Text>
+                  <Newline />
                   <Text color="green">
                     Categories to Delete: {streamingData.deleteCount || 0}
                   </Text>
+                  <Newline />
                   <Text color="green">
                     Repos to Reassign: {streamingData.reassignCount || 0}
                   </Text>
@@ -1772,9 +1899,11 @@ const ConstellateStreamingApp: React.FC<{
                   Object.keys(streamingData.partialResult.aliases).length >
                     0 && (
                     <Box flexDirection="column" paddingLeft={2} marginTop={1}>
-                      <Text color="cyan" bold>
-                        Category Aliases:
-                      </Text>
+                      <Box marginBottom={1}>
+                        <Text color="cyan" bold>
+                          Category Aliases:
+                        </Text>
+                      </Box>
                       {Object.entries(streamingData.partialResult.aliases || {})
                         .slice(0, 3)
                         .map(([alias, canonical], idx) => {
@@ -1817,50 +1946,29 @@ const ConstellateStreamingApp: React.FC<{
                   )}
               </Box>
             )}
-          </>
-        )}
-
-        <Newline />
-        {isViewingCurrentBatch && totalBatches > 0 && (
-          <>
-            <Spinner type="dots" />
-            <Text color="cyan">
-              {' '}
-              Processing batch {currentBatch} of {totalBatches}...
-            </Text>
-          </>
-        )}
-        {!isViewingCurrentBatch && totalBatches > 0 && (
-          <Text color="gray" dimColor>
-            Viewing completed batch {selectedBatchIndex + 1} of {totalBatches}
-          </Text>
-        )}
-
-        {/* Navigation Help */}
-        {allBatchesData.length > 1 && aiPhase === 'pass1' && (
-          <Box marginTop={1}>
-            <Text color="gray" dimColor>
-              Use ←→ or h/l keys to navigate between batches • Q to quit
-            </Text>
           </Box>
         )}
-      </Box>
+      </StepLayout>
     );
   }
 
   return (
-    <Box flexDirection="column" width={contentWidth}>
-      <Text color="blue" bold>
-        🎉 Constellator – Processing Complete!
-      </Text>
-      <Newline />
-      <Text color="green">
-        ✅ All processing complete! Check .constellator/ and {outputFilename}
-      </Text>
-      <Text color="gray" dimColor>
-        Press Q to quit
-      </Text>
-    </Box>
+    <StepLayout
+      title={getTitle()}
+      description={getDescription()}
+      currentStep={getCurrentStep()}
+      totalSteps={getTotalSteps()}
+      progress={getProgress()}
+      footer={
+        <Text color="gray" dimColor>
+          Press Q to quit
+        </Text>
+      }
+    >
+      <StatusMessage variant="success">
+        All processing complete! Check .constellator/ and {outputFilename}
+      </StatusMessage>
+    </StepLayout>
   );
 };
 
@@ -1937,24 +2045,16 @@ const main = Effect.gen(function* () {
 
   if (savedConfig && cmd !== 'config') {
     applyConfigToEnv(savedConfig);
-    console.log('✅ Loaded saved configuration from .constellator/config.json');
-    console.log('\n📋 Current Configuration:');
-    for (const [key, value] of Object.entries(savedConfig)) {
-      const configOption = CONFIG_OPTIONS.find((opt) => opt.key === key);
-      const displayName = configOption?.label || key;
-      const displayValue = key.toLowerCase().includes('token')
-        ? '••••••••'
-        : value;
-      console.log(`  ${displayName}: ${displayValue}`);
-    }
-    console.log('');
   }
 
   // Interactive configuration setup (unless skipped)
   if (!skipConfig && (!savedConfig || cmd === 'config')) {
     const configPromise = new Promise<Record<string, string>>((resolve) => {
       const { waitUntilExit } = render(
-        <InteractiveConfigApp onConfigComplete={resolve} />
+        <InteractiveConfigApp
+          onConfigComplete={resolve}
+          savedConfig={savedConfig || undefined}
+        />
       );
     });
 

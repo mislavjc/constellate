@@ -125,7 +125,10 @@ export async function absorbAliasesIntoGlossary(fix: z.infer<typeof QaFix>) {
 }
 
 // README render safety with singleton filtering
-export function filterCategoriesForReadme(store: ConstellateStore, minSize = 1) {
+export function filterCategoriesForReadme(
+  store: ConstellateStore,
+  minSize = 1
+) {
   return store.categories.filter((c) => c.repos.length >= minSize);
 }
 
@@ -175,7 +178,10 @@ export async function loadCategoryGlossary(): Promise<
   glossaryCachePromise = (async () => {
     try {
       const fs = await import('fs/promises');
-      const data = await fs.readFile('.constellator/category-glossary.json', 'utf-8');
+      const data = await fs.readFile(
+        '.constellator/category-glossary.json',
+        'utf-8'
+      );
       const parsed = CategoryGlossary.parse(JSON.parse(data));
       glossaryCache = parsed; // Cache the result
       return parsed;
@@ -485,7 +491,7 @@ Rules:
         policies: { ...policies, splitThreshold: policies.splitThreshold || 6 },
         repos: repoSignals,
         proposed: merged,
-        return_schema: '{ categories[], assignments[] }',
+        returnSchema: '{ categories[], assignments[] }',
       }),
     },
   ];
@@ -795,7 +801,10 @@ If count < minCategorySize, either (a) alias to closest match, or (b) keep if it
   }
 }
 
-export function applyQaFix(store: ConstellateStore, fix: z.infer<typeof QaFix>) {
+export function applyQaFix(
+  store: ConstellateStore,
+  fix: z.infer<typeof QaFix>
+) {
   // 1) Build canonical slug map
   const aliasTo = new Map<string, string>();
   for (const [alias, target] of Object.entries(fix.aliases || {})) {
