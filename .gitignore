@@ -3,7 +3,7 @@ node_modules/
 bun.lock
 
 # Generated data files
-.constellate/
+.constellator/
 
 # Generated markdown files
 *-AWESOME.md

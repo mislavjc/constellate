@@ -1,10 +1,10 @@
 {
-  "name": "constellate",
+  "name": "constellator",
   "version": "0.1.0",
   "description": "Turn a repo list into a clean constellation of categories.",
   "type": "module",
   "bin": {
-    "constellate": "cli.cjs"
+    "constellator": "cli.cjs"
   },
   "engines": {
     "node": ">=18"
@@ -21,7 +21,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mislavjc/constellate.git"
+    "url": "git+https://github.com/mislavjc/constellator.git"
   },
   "devDependencies": {
     "@types/bun": "latest"

@@ -19,5 +19,5 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
   },
-  "exclude": ["node_modules", "dist", ".constellate", "cli.cjs", "cli.js"]
+  "exclude": ["node_modules", "dist", ".constellator", "cli.cjs", "cli.js"]
 }

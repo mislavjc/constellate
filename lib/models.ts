@@ -1,5 +1,5 @@
 /**
- * Model limits and context management for Constellate pipeline
+ * Model limits and context management for Constellator pipeline
  * Uses AI gateway to get model information and limits
  */
 

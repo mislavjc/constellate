@@ -2,8 +2,8 @@ import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
 
-export const TOKEN_PATH = path.join(os.homedir(), '.constellate.json');
-const CONFIG_FILE_PATH = '.constellate/config.json';
+export const TOKEN_PATH = path.join(os.homedir(), '.constellator.json');
+const CONFIG_FILE_PATH = '.constellator/config.json';
 
 // Load saved configuration
 function loadSavedConfig(): Record<string, any> {

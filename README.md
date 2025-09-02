@@ -15,11 +15,11 @@
 
 </center>
 
-# 🌌 Constellate
+# 🌌 Constellator
 
 **Transform your GitHub stars into beautifully organized, AI-curated collections**
 
-Constellate is a powerful CLI tool that analyzes your GitHub starred repositories using advanced AI and automatically organizes them into meaningful categories. It creates an "awesome list" style markdown file with intelligent categorization, summaries, and metadata.
+Constellator is a powerful CLI tool that analyzes your GitHub starred repositories using advanced AI and automatically organizes them into meaningful categories. It creates an "awesome list" style markdown file with intelligent categorization, summaries, and metadata.
 
 ## ✨ Features
 
@@ -46,7 +46,7 @@ Constellate is a powerful CLI tool that analyzes your GitHub starred repositorie
 
    ```bash
    git clone <your-repo-url>
-   cd constellate
+   cd constellator
    ```
 
 2. **Install dependencies:**
@@ -62,15 +62,15 @@ Constellate is a powerful CLI tool that analyzes your GitHub starred repositorie
    echo "AI_GATEWAY_API_KEY=your_vercel_ai_gateway_api_key_here" > .env
    ```
 
-4. **Configure application settings (.constellate/config.json):**
+4. **Configure application settings (.constellator/config.json):**
 
    ```bash
-   # Run initial setup to create .constellate/config.json
+   # Run initial setup to create .constellator/config.json
    bun run index.tsx config
 
    # Or manually create the config file:
-   mkdir -p .constellate
-   cat > .constellate/config.json << EOF
+   mkdir -p .constellator
+   cat > .constellator/config.json << EOF
    {
      "CONSTELLATE_MAX_REPOS": "100",
      "CONSTELLATE_MODEL": "openai/gpt-4o-mini",
@@ -107,10 +107,10 @@ bun run index.tsx --name MY_STARS.md
 
 ```bash
 # Using npx (after publishing or linking locally)
-npx constellate
+npx constellator
 
 # Using bunx
-bunx constellate
+bunx constellator
 
 # Direct execution
 node cli.cjs
@@ -130,7 +130,7 @@ bun run index.tsx logout
 
 ## 🎯 How It Works
 
-Constellate uses a sophisticated 4-pass AI processing pipeline:
+Constellator uses a sophisticated 4-pass AI processing pipeline:
 
 ### Pass 0: Facts Extraction
 
@@ -158,14 +158,14 @@ Constellate uses a sophisticated 4-pass AI processing pipeline:
 
 ## 📁 Output Structure
 
-Constellate generates several files in your project directory:
+Constellator generates several files in your project directory:
 
 ```
 your-project/
 ├── AWESOME.md                    # Main categorized list (or custom name)
-├── .constellate/
+├── .constellator/
 │   ├── config.json               # Your configuration settings
-│   ├── constellate.json          # Processed repository data with categories
+│   ├── constellator.json          # Processed repository data with categories
 │   ├── repos.json                # Raw repository metadata (renamed from stars.json)
 │   └── category-glossary.json    # AI-learned category definitions
 └── .env                          # Environment variables (AI Gateway key only)
@@ -174,15 +174,15 @@ your-project/
 ### Key Files Created:
 
 - **AWESOME.md**: The main output file with your organized repository list
-- **.constellate/constellate.json**: Complete processed data with all repository metadata, categories, and AI analysis
-- **.constellate/repos.json**: Raw repository data fetched from GitHub
-- **.constellate/category-glossary.json**: AI-learned category definitions for consistency across runs
+- **.constellator/constellator.json**: Complete processed data with all repository metadata, categories, and AI analysis
+- **.constellator/repos.json**: Raw repository data fetched from GitHub
+- **.constellator/category-glossary.json**: AI-learned category definitions for consistency across runs
 
 ## ⚙️ Configuration
 
 ### Configuration Files
 
-Constellate uses two configuration files:
+Constellator uses two configuration files:
 
 #### 1. Environment Variables (.env)
 
@@ -193,7 +193,7 @@ Constellate uses two configuration files:
 AI_GATEWAY_API_KEY=vck_your_vercel_ai_gateway_key_here
 ```
 
-#### 2. Application Settings (.constellate/config.json)
+#### 2. Application Settings (.constellator/config.json)
 
 **All other configuration goes here:**
 
@@ -211,10 +211,10 @@ AI_GATEWAY_API_KEY=vck_your_vercel_ai_gateway_key_here
 | Variable                      | File                       | Default                | Description                     |
 | ----------------------------- | -------------------------- | ---------------------- | ------------------------------- |
 | `AI_GATEWAY_API_KEY`          | `.env`                     | Required               | Vercel AI Gateway API key       |
-| `GITHUB_TOKEN`                | `.constellate/config.json` | Required               | GitHub Personal Access Token    |
-| `CONSTELLATE_MAX_REPOS`       | `.constellate/config.json` | `100`                  | Maximum repositories to process |
-| `CONSTELLATE_MODEL`           | `.constellate/config.json` | `openai/gpt-4o-mini`   | Primary AI model to use         |
-| `CONSTELLATE_FALLBACK_MODELS` | `.constellate/config.json` | `openai/gpt-3.5-turbo` | Fallback AI models              |
+| `GITHUB_TOKEN`                | `.constellator/config.json` | Required               | GitHub Personal Access Token    |
+| `CONSTELLATE_MAX_REPOS`       | `.constellator/config.json` | `100`                  | Maximum repositories to process |
+| `CONSTELLATE_MODEL`           | `.constellator/config.json` | `openai/gpt-4o-mini`   | Primary AI model to use         |
+| `CONSTELLATE_FALLBACK_MODELS` | `.constellator/config.json` | `openai/gpt-3.5-turbo` | Fallback AI models              |
 
 ### CLI Options
 
@@ -227,7 +227,7 @@ AI_GATEWAY_API_KEY=vck_your_vercel_ai_gateway_key_here
 ## 🎨 Example Output
 
 ```markdown
-# Awesome – Generated by Constellate
+# Awesome – Generated by Constellator
 
 > Categories distilled from your stars via multi‑pass AI. Updated 2025-01-15.
 
@@ -252,7 +252,7 @@ Advanced AI agent framework for autonomous task execution.
 ### Project Structure
 
 ```
-constellate/
+constellator/
 ├── index.tsx              # Main CLI application
 ├── cli.cjs               # Executable wrapper script
 ├── .env                  # Environment variables (AI Gateway key only)
@@ -263,9 +263,9 @@ constellate/
 │   ├── models.ts         # AI model selection
 │   ├── schemas.ts        # Data validation schemas
 │   └── utils.ts          # Utility functions
-├── .constellate/         # Application configuration & data files
+├── .constellator/         # Application configuration & data files
 │   ├── config.json       # User configuration settings
-│   ├── constellate.json  # Processed repository data
+│   ├── constellator.json  # Processed repository data
 │   ├── repos.json        # Raw repository metadata
 │   └── category-glossary.json # AI-learned category definitions
 ├── dist/                 # Compiled JavaScript output
@@ -316,7 +316,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 **"No starred repositories found"**
 
-- Verify your GitHub token in `.constellate/config.json` has the correct permissions
+- Verify your GitHub token in `.constellator/config.json` has the correct permissions
 - Check that you have starred repositories
 
 **"AI Gateway authentication failed"**
@@ -326,20 +326,20 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 **"AI Gateway API rate limit exceeded"**
 
-- Reduce `CONSTELLATE_MAX_REPOS` in `.constellate/config.json` or wait for rate limit reset
+- Reduce `CONSTELLATE_MAX_REPOS` in `.constellator/config.json` or wait for rate limit reset
 - Consider upgrading your Vercel AI Gateway plan
 
 **"Configuration not found"**
 
 - Run `bun run index.tsx config` to set up your configuration
-- Ensure `.constellate/config.json` exists with proper settings
+- Ensure `.constellator/config.json` exists with proper settings
 - Make sure `.env` contains your `AI_GATEWAY_API_KEY`
 
 ### Getting Help
 
-- Check the [Issues](https://github.com/mislavjc/constellate/issues) page
+- Check the [Issues](https://github.com/mislavjc/constellator/issues) page
 - Review the configuration files above
-- Ensure both `.env` and `.constellate/config.json` are properly configured
+- Ensure both `.env` and `.constellator/config.json` are properly configured
 
 ---
 
