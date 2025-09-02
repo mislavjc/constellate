@@ -1,3 +1,20 @@
+<center>
+
+```
+         .    *   .  .  *    .    *   .
+     .     *      .    *      .     *    .
+  *    .     *   .     *    .     *   .   *
+   .     *       .     *    .     *      .  .
+ *   .     *   .     *    .     *   .     * .
+  .     *    .     *      .     *    .     *
+    *    .     *   .     *    .     *   .
+   .     *      .     *    .     *      .
+     *    .     *   .     *    .     *
+       .    *      .    *      .    *
+```
+
+</center>
+
 # 🌌 Nebula
 
 **Transform your GitHub stars into beautifully organized, AI-curated collections**
@@ -6,7 +23,7 @@ Nebula is a powerful CLI tool that analyzes your GitHub starred repositories usi
 
 ## ✨ Features
 
-- 🤖 **AI-Powered Categorization**: Uses OpenAI's GPT models to intelligently categorize repositories
+- 🤖 **AI-Powered Categorization**: Uses Vercel AI Gateway with OpenAI GPT-OSS models to intelligently categorize repositories
 - 📊 **Multi-Pass Processing**: Advanced 4-pass AI pipeline for accurate classification
 - 🎨 **Beautiful Output**: Generates clean, organized markdown files
 - ⚡ **Fast & Modern**: Built with Bun runtime for optimal performance
@@ -21,7 +38,7 @@ Nebula is a powerful CLI tool that analyzes your GitHub starred repositories usi
 
 - [Bun](https://bun.sh/) (recommended) or Node.js
 - GitHub Personal Access Token with `repo` scope
-- OpenAI API key
+- Vercel AI Gateway API key
 
 ### Installation
 
@@ -41,7 +58,7 @@ Nebula is a powerful CLI tool that analyzes your GitHub starred repositories usi
 3. **Set up environment variables:**
    ```bash
    export GITHUB_TOKEN="your_github_token_here"
-   export OPENAI_API_KEY="your_openai_api_key_here"
+   export AI_GATEWAY_API_KEY="your_ai_gateway_api_key_here"
    ```
 
 ### Usage
@@ -115,17 +132,17 @@ your-project/
 
 ### Environment Variables
 
-| Variable                   | Default      | Description                       |
-| -------------------------- | ------------ | --------------------------------- |
-| `GITHUB_TOKEN`             | Required     | GitHub Personal Access Token      |
-| `OPENAI_API_KEY`           | Required     | OpenAI API Key                    |
-| `NEBULA_MAX_REPOS`         | `10`         | Maximum repositories to process   |
-| `NEBULA_BATCH`             | `6`          | Batch size for processing         |
-| `NEBULA_MAX_README_TOKENS` | `16000`      | Max tokens per README             |
-| `NEBULA_MODEL`             | `gpt-5-mini` | OpenAI model to use               |
-| `NEBULA_MIN_CAT_SIZE`      | `2`          | Minimum repositories per category |
-| `NEBULA_MAX_CATEGORIES`    | `80`         | Maximum number of categories      |
-| `NEBULA_README_MIN_SIZE`   | `0`          | Minimum category size for README  |
+| Variable                   | Default              | Description                       |
+| -------------------------- | -------------------- | --------------------------------- |
+| `GITHUB_TOKEN`             | Required             | GitHub Personal Access Token      |
+| `AI_GATEWAY_API_KEY`       | Required             | Vercel AI Gateway API Key         |
+| `NEBULA_MAX_REPOS`         | `10`                 | Maximum repositories to process   |
+| `NEBULA_BATCH`             | `6`                  | Batch size for processing         |
+| `NEBULA_MAX_README_TOKENS` | `16000`              | Max tokens per README             |
+| `NEBULA_MODEL`             | `openai/gpt-oss-20b` | AI Gateway model to use           |
+| `NEBULA_MIN_CAT_SIZE`      | `2`                  | Minimum repositories per category |
+| `NEBULA_MAX_CATEGORIES`    | `80`                 | Maximum number of categories      |
+| `NEBULA_README_MIN_SIZE`   | `0`                  | Minimum category size for README  |
 
 ### CLI Options
 
@@ -211,7 +228,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## 🙏 Acknowledgments
 
 - Built with [Bun](https://bun.sh/) for modern JavaScript runtime
-- Uses [OpenAI](https://openai.com/) for AI processing
+- Uses [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) for AI processing
 - Terminal UI powered by [Ink](https://github.com/vadimdemedes/ink)
 
 ## 🐛 Troubleshooting
@@ -223,10 +240,10 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - Verify your GitHub token has the correct permissions
 - Check that you have starred repositories
 
-**"OpenAI API rate limit exceeded"**
+**"AI Gateway API rate limit exceeded"**
 
 - Reduce `NEBULA_MAX_REPOS` or wait for rate limit reset
-- Consider upgrading your OpenAI plan
+- Consider upgrading your Vercel AI Gateway plan
 
 **"Processing timeout"**
 
