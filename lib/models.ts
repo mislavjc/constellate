@@ -14,7 +14,7 @@ import {
   NEBULA_FALLBACK_MODELS,
 } from './config';
 
-const CACHE_PATH = 'data/models-dev-cache.json';
+const CACHE_PATH = '.nebula/models-dev-cache.json';
 
 // Cache model limits to avoid repeated file/network operations
 let modelLimitsCache: Record<string, ModelLimits> | null = null;
@@ -92,7 +92,7 @@ async function ensureCacheLoaded(): Promise<void> {
         }
 
         // Save to disk cache
-        await fs.mkdir('data', { recursive: true });
+        await fs.mkdir('.nebula', { recursive: true });
         await fs.writeFile(CACHE_PATH, JSON.stringify(parsed, null, 2));
       } catch (error) {
         console.warn('Failed to load model limits from API:', error);

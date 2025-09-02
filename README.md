@@ -122,7 +122,7 @@ Nebula generates several files:
 ```
 your-project/
 ├── AWESOME.md          # Main categorized list (or custom name)
-├── data/
+├── .nebula/
 │   ├── nebula.json     # Processed repository data with categories
 │   ├── stars.json      # Raw repository metadata
 │   └── category-glossary.json  # AI-learned category definitions
@@ -189,7 +189,7 @@ nebula/
 │   ├── models.ts         # AI model selection
 │   ├── schemas.ts        # Data validation schemas
 │   └── utils.ts          # Utility functions
-├── data/                 # Generated data files
+├── .nebula/              # Generated data files
 └── package.json
 ```
 

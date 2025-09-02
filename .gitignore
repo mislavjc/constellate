@@ -1,36 +1,34 @@
-# dependencies (bun install)
-node_modules
+# Dependencies
+node_modules/
+bun.lock
 
-# output
-out
-dist
-*.tgz
+# Generated data files
+.nebula/
 
-# code coverage
-coverage
-*.lcov
+# Generated markdown files
+*-AWESOME.md
+AWESOME.md
 
-# logs
-logs
-_.log
-report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
-
-# dotenv environment variable files
+# Environment files
 .env
-.env.development.local
-.env.test.local
-.env.production.local
 .env.local
 
-# caches
-.eslintcache
-.cache
-*.tsbuildinfo
-
-# IntelliJ based IDEs
-.idea
-
-# Finder (MacOS) folder config
+# OS generated files
 .DS_Store
+Thumbs.db
 
-data
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs
+dist/
+build/

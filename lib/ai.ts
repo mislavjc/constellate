@@ -188,7 +188,7 @@ export async function loadCategoryGlossary(): Promise<
   glossaryCachePromise = (async () => {
     try {
       const fs = await import('fs/promises');
-      const data = await fs.readFile('data/category-glossary.json', 'utf-8');
+      const data = await fs.readFile('.nebula/category-glossary.json', 'utf-8');
       const parsed = CategoryGlossary.parse(JSON.parse(data));
       glossaryCache = parsed; // Cache the result
       return parsed;
@@ -260,9 +260,9 @@ export async function saveCategoryGlossary(
   glossary: z.infer<typeof CategoryGlossary>
 ): Promise<void> {
   const fs = await import('fs/promises');
-  await fs.mkdir('data', { recursive: true });
+  await fs.mkdir('.nebula', { recursive: true });
   await fs.writeFile(
-    'data/category-glossary.json',
+    '.nebula/category-glossary.json',
     JSON.stringify(glossary, null, 2)
   );
 

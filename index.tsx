@@ -241,6 +241,184 @@ type ProcessedRepo = {
   readme?: string;
 };
 
+// Component for fetching starred repos with progress indication
+const StarFetchingApp: React.FC<{
+  token: string;
+  maxRepos: number;
+  outputFilename: string;
+  username?: string;
+  onStarsFetched: (stars: StarredRepo[]) => void;
+}> = ({ token, maxRepos, username, onStarsFetched }) => {
+  const [fetchingPhase, setFetchingPhase] = useState<
+    'connecting' | 'fetching' | 'complete'
+  >('connecting');
+  const [starsFetched, setStarsFetched] = useState(0);
+  const [totalStars, setTotalStars] = useState(0);
+  const [currentBatch, setCurrentBatch] = useState(0);
+  const [recentStars, setRecentStars] = useState<StarredRepo[]>([]);
+  const [isComplete, setIsComplete] = useState(false);
+  const { stdout } = useStdout();
+  const contentWidth = Math.min((stdout?.columns ?? 80) - 4, 100);
+
+  // Handle keyboard input for quitting
+  useInput((input, key) => {
+    if (input === 'q') {
+      console.log('\n👋 Exiting Nebula...');
+      process.exit(0);
+    }
+  });
+
+  useEffect(() => {
+    const fetchStarsWithProgress = async () => {
+      try {
+        const allStars: StarredRepo[] = [];
+        let url = 'https://api.github.com/user/starred?per_page=200';
+        let batchCount = 0;
+
+        setFetchingPhase('fetching');
+
+        while (url && allStars.length < maxRepos) {
+          batchCount++;
+          setCurrentBatch(batchCount);
+
+          const response = await fetch(url, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/vnd.github+json',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'nebula',
+            },
+          });
+
+          if (!response.ok) {
+            throw new Error(`GitHub API error: ${response.status}`);
+          }
+
+          const batch = (await response.json()) as any[];
+          const processedBatch: StarredRepo[] = batch.map((repo) => ({
+            full_name: repo.full_name,
+            description: repo.description,
+            html_url: repo.html_url,
+            stargazers_count: repo.stargazers_count,
+            language: repo.language,
+          }));
+
+          // Only add repositories up to the limit
+          const remaining = maxRepos - allStars.length;
+          const reposToAdd = processedBatch.slice(0, remaining);
+          allStars.push(...reposToAdd);
+
+          setStarsFetched(allStars.length);
+          setRecentStars(reposToAdd.slice(0, 3)); // Show last 3 from current batch
+
+          // Update progress display - show current count and indicate we're still fetching
+          setTotalStars(allStars.length); // Show current count as we fetch
+
+          // Stop if we've reached the limit
+          if (allStars.length >= maxRepos) {
+            break;
+          }
+
+          // Get next page URL from Link header
+          const linkHeader = response.headers.get('link');
+          const nextMatch = linkHeader?.match(/<([^>]+)>;\s*rel="next"/);
+          url = nextMatch?.[1] ?? '';
+
+          // Add a small delay to avoid overwhelming the API and UI
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+
+        setFetchingPhase('complete');
+        setStarsFetched(allStars.length);
+        setTotalStars(allStars.length); // Final accurate count
+        setIsComplete(true);
+
+        // Small delay to show completion
+        setTimeout(() => {
+          onStarsFetched(allStars.slice(0, maxRepos));
+        }, 500);
+      } catch (error) {
+        console.error('Error fetching starred repositories:', error);
+        setFetchingPhase('complete');
+      }
+    };
+
+    fetchStarsWithProgress();
+  }, [token, maxRepos, onStarsFetched]);
+
+  return (
+    <Box flexDirection="column" width={contentWidth}>
+      <Text color="blue" bold>
+        ⭐ Nebula – Fetching {username ? `@${username}'s ` : 'Your '}Starred
+        Repositories
+      </Text>
+      <Newline />
+
+      {fetchingPhase === 'connecting' && (
+        <>
+          <Text color="cyan">🔗 Connecting to GitHub...</Text>
+          <Newline />
+          <Spinner type="dots" />
+        </>
+      )}
+
+      {fetchingPhase === 'fetching' && (
+        <>
+          <Text color="cyan">
+            📥 Fetching starred repositories from GitHub...
+          </Text>
+          <Newline />
+
+          <Box flexDirection="column" marginBottom={1}>
+            <Text color="yellow">
+              Progress: {starsFetched} repositories fetched
+              {isComplete &&
+                starsFetched >= maxRepos &&
+                ` (limit reached: ${maxRepos})`}
+              {isComplete && starsFetched < maxRepos && ' (complete)'}
+            </Text>
+
+            <ProgressBar
+              current={isComplete ? 10 : currentBatch % 10} // Show full progress when complete
+              total={10} // Keep it simple and animated
+              width={Math.min(40, contentWidth - 10)}
+            />
+          </Box>
+
+          <Text color="gray" dimColor>
+            Batch {currentBatch} • Press Q to quit
+          </Text>
+
+          {recentStars.length > 0 && (
+            <Box flexDirection="column" marginTop={1}>
+              <Text color="cyan" bold>
+                Latest repositories:
+              </Text>
+              {recentStars.map((star, idx) => (
+                <Text key={idx} color="green">
+                  • {star.full_name} ({star.stargazers_count} ⭐)
+                </Text>
+              ))}
+            </Box>
+          )}
+        </>
+      )}
+
+      {fetchingPhase === 'complete' && (
+        <>
+          <Text color="green">
+            ✅ Found {starsFetched} starred repositories
+            {starsFetched >= maxRepos ? ` (limited to ${maxRepos})` : ''}!
+          </Text>
+          <Newline />
+          <Text color="cyan">🚀 Starting AI processing...</Text>
+          <Spinner type="dots" />
+        </>
+      )}
+    </Box>
+  );
+};
+
 // Streaming version of Nebula processing with AI streaming
 const NebulaStreamingApp: React.FC<{
   stars: StarredRepo[];
@@ -720,14 +898,14 @@ const NebulaStreamingApp: React.FC<{
         ensureMinimumFeatureSignals(repoFeatures);
 
         // Write artifacts
-        await fs.mkdir('data', { recursive: true });
+        await fs.mkdir('.nebula', { recursive: true });
         await fs.writeFile(
-          'data/stars.json',
+          '.nebula/stars.json',
           JSON.stringify(repoFeatures, null, 2),
           'utf-8'
         );
         await fs.writeFile(
-          'data/nebula.json',
+          '.nebula/nebula.json',
           JSON.stringify(store, null, 2),
           'utf-8'
         );
@@ -1156,7 +1334,7 @@ const NebulaStreamingApp: React.FC<{
       </Text>
       <Newline />
       <Text color="green">
-        ✅ All processing complete! Check data/ and {outputFilename}
+        ✅ All processing complete! Check .nebula/ and {outputFilename}
       </Text>
       <Text color="gray" dimColor>
         Press Q to quit
@@ -1197,28 +1375,38 @@ const main = Effect.gen(function* () {
   });
 
   const me = yield* whoAmI(token);
-  if (me) console.log(`\n⭐ Starred repos for @${me.login}\n`);
 
-  const stars = yield* listStarred(token);
-  if (stars.length === 0) {
-    console.log('No starred repositories found.');
-    return;
-  }
-
+  // Show progress during star fetching (username will be shown in UI)
   const { waitUntilExit } = render(
-    <NebulaStreamingApp
-      stars={stars}
-      maxRepos={MAX_REPOS_TO_PROCESS}
+    <StarFetchingApp
       token={token}
+      maxRepos={MAX_REPOS_TO_PROCESS}
       outputFilename={outputFilename}
-      onFinish={(_store) => {
-        Effect.runPromise(
-          Console.log(
-            `\n✅ All processing complete! Wrote data/nebula.json and ${outputFilename}`
-          )
-        ).catch(() => {
-          // Error already handled above
-        });
+      username={me?.login}
+      onStarsFetched={(stars) => {
+        if (stars.length === 0) {
+          console.log('No starred repositories found.');
+          process.exit(0);
+        }
+
+        // Now render the main processing app with fetched stars
+        render(
+          <NebulaStreamingApp
+            stars={stars}
+            maxRepos={MAX_REPOS_TO_PROCESS}
+            token={token}
+            outputFilename={outputFilename}
+            onFinish={(_store) => {
+              Effect.runPromise(
+                Console.log(
+                  `\n✅ All processing complete! Wrote .nebula/nebula.json and ${outputFilename}`
+                )
+              ).catch(() => {
+                // Error already handled above
+              });
+            }}
+          />
+        );
       }}
     />
   );
