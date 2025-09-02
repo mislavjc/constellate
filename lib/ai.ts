@@ -25,20 +25,7 @@ function cachedSlugify(text: string): string {
 }
 import { headTailSlice, estimateTokens } from './tokens';
 import { pickModelFor } from './models';
-import {
-  NEBULA_PASS0_BATCH,
-  NEBULA_MAX_README_TOKENS,
-  NEBULA_RESERVE_TOKENS_PASS0,
-  NEBULA_RESERVE_TOKENS_PASS1,
-  NEBULA_RESERVE_TOKENS_PASS2,
-  NEBULA_RESERVE_TOKENS_PASS3,
-  NEBULA_MODEL,
-} from './config';
-import {
-  NEBULA_CAT_TARGET_MIN,
-  NEBULA_CAT_TARGET_MAX,
-  NEBULA_SPLIT_THRESHOLD,
-} from './config';
+import { NEBULA_MODEL } from './config';
 // ------------------------------ AI Utilities --------------------------------
 
 // Dynamic model selection based on context needs
@@ -289,8 +276,8 @@ export async function* aiPass0FactsExtractorStreaming(
   batchRepos: RepoFeature[]
 ) {
   // MICRO-BATCH: start with configurable batch size; can shrink if overflow happens
-  const BATCH_SIZE = Math.max(1, Number(NEBULA_PASS0_BATCH) || 4);
-  const MAX_README_TOKENS = NEBULA_MAX_README_TOKENS;
+  const BATCH_SIZE = 4;
+  const MAX_README_TOKENS = 20000;
 
   const groups = Array.from(
     { length: Math.ceil(batchRepos.length / BATCH_SIZE) },
@@ -355,7 +342,7 @@ export async function* aiPass0FactsExtractorStreaming(
             .default([]),
         }),
         messages,
-        reserveOutput: Number(NEBULA_RESERVE_TOKENS_PASS0) || 1024,
+        reserveOutput: Number(1024) || 1024,
       });
     }, group);
   }
@@ -363,7 +350,7 @@ export async function* aiPass0FactsExtractorStreaming(
 
 // Pass-1 (Expand + Summaries) - Revised with structured prompts and safe context handling
 export async function* aiPass1ExpandStreaming(batchRepos: RepoFeature[]) {
-  const MAX_README_TOKENS = NEBULA_MAX_README_TOKENS;
+  const MAX_README_TOKENS = 20000;
 
   const compact = batchRepos.map((r) => ({
     id: r.id,
@@ -436,7 +423,7 @@ Segmentation guidance:
     modelId: modelName,
     schema: ExpandPlanPlus,
     messages,
-    reserveOutput: Number(NEBULA_RESERVE_TOKENS_PASS1) || 2048,
+    reserveOutput: Number(2048) || 2048,
   });
 
   for await (const partialObject of partialObjectStream) {
@@ -508,7 +495,7 @@ Rules:
     modelId: modelName,
     schema: ExpandPlanPlus, // reuse: categories+assignments are compatible
     messages,
-    reserveOutput: Number(NEBULA_RESERVE_TOKENS_PASS1) || 2048,
+    reserveOutput: Number(2048) || 2048,
   });
 
   for await (const partialObject of partialObjectStream) {
@@ -553,7 +540,7 @@ Goals:
 2) Keep important, widely-recognized domains distinct.
 3) Prefer layer/language splits only when helpful within the target budget.
 
-Target range: min = ${NEBULA_CAT_TARGET_MIN}, max = ${NEBULA_CAT_TARGET_MAX}.
+Target range: min = ${22}, max = ${36}.
 Return updated canonical categories and a reassignment map (id -> category).`,
     },
     {
@@ -585,7 +572,7 @@ Return updated canonical categories and a reassignment map (id -> category).`,
     modelId: modelName,
     schema: BudgetFix,
     messages,
-    reserveOutput: Number(NEBULA_RESERVE_TOKENS_PASS2) || 2048,
+    reserveOutput: Number(2048) || 2048,
   });
 
   for await (const partialObject of partialObjectStream) {
@@ -722,7 +709,7 @@ If two categories fit equally, choose the one with more repos after consolidatio
     modelId: modelName,
     schema: StreamlinedPlan,
     messages,
-    reserveOutput: Number(NEBULA_RESERVE_TOKENS_PASS2) || 2048,
+    reserveOutput: Number(2048) || 2048,
   });
 
   for await (const partialObject of partialObjectStream) {
@@ -800,7 +787,7 @@ If count < minCategorySize, either (a) alias to closest match, or (b) keep if it
     modelId: modelName,
     schema: QaFix,
     messages,
-    reserveOutput: Number(NEBULA_RESERVE_TOKENS_PASS3) || 1024,
+    reserveOutput: Number(1024) || 1024,
   });
 
   for await (const partialObject of partialObjectStream) {

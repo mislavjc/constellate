@@ -1,67 +1,61 @@
 import path from 'node:path';
 import os from 'node:os';
+import fs from 'node:fs';
 
 export const TOKEN_PATH = path.join(os.homedir(), '.nebula.json');
-export const CLIENT_ID = process.env.GITHUB_CLIENT_ID ?? 'Iv1.0000000000000000';
-export const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
-export const MAX_REPOS_TO_PROCESS = parseInt(
-  process.env.NEBULA_MAX_REPOS || '10'
-);
-export const NEBULA_BATCH = parseInt(process.env.NEBULA_BATCH || '4');
+const CONFIG_FILE_PATH = '.nebula/config.json';
 
-// Context and token management
-export const MODELS_DEV_URL =
-  process.env.MODELS_DEV_URL || 'https://models.dev/api.json';
-export const NEBULA_DEFAULT_CONTEXT = parseInt(
-  process.env.NEBULA_DEFAULT_CONTEXT || '128000'
-);
-export const NEBULA_DEFAULT_OUTPUT = parseInt(
-  process.env.NEBULA_DEFAULT_OUTPUT || '8192'
-);
-export const NEBULA_MAX_README_TOKENS = parseInt(
-  process.env.NEBULA_MAX_README_TOKENS || '20000'
-);
+// Load saved configuration
+function loadSavedConfig(): Record<string, any> {
+  try {
+    const configData = fs.readFileSync(CONFIG_FILE_PATH, 'utf-8');
+    const parsed = JSON.parse(configData);
+    // Validate that it's an object
+    if (typeof parsed === 'object' && parsed !== null) {
+      return parsed;
+    }
+    return {};
+  } catch {
+    return {};
+  }
+}
 
-// Category budgeting
-export const NEBULA_CAT_TARGET_MIN = parseInt(
-  process.env.NEBULA_CAT_TARGET_MIN || '22'
-);
-export const NEBULA_CAT_TARGET_MAX = parseInt(
-  process.env.NEBULA_CAT_TARGET_MAX || '36'
-);
-export const NEBULA_SPLIT_THRESHOLD = parseInt(
-  process.env.NEBULA_SPLIT_THRESHOLD || '4'
-);
+const savedConfig = loadSavedConfig();
 
-// Pass-specific batch sizes
-export const NEBULA_PASS0_BATCH = parseInt(
-  process.env.NEBULA_PASS0_BATCH || '4'
-);
+// Configuration from saved file only (no env fallbacks)
+export const GITHUB_TOKEN = (() => {
+  const token = String(savedConfig.GITHUB_TOKEN || '');
+  return token.trim();
+})();
 
-// Reserve tokens for each pass (for output generation)
-export const NEBULA_RESERVE_TOKENS_PASS0 = parseInt(
-  process.env.NEBULA_RESERVE_TOKENS_PASS0 || '1024'
-);
-export const NEBULA_RESERVE_TOKENS_PASS1 = parseInt(
-  process.env.NEBULA_RESERVE_TOKENS_PASS1 || '2048'
-);
-export const NEBULA_RESERVE_TOKENS_PASS2 = parseInt(
-  process.env.NEBULA_RESERVE_TOKENS_PASS2 || '2048'
-);
-export const NEBULA_RESERVE_TOKENS_PASS3 = parseInt(
-  process.env.NEBULA_RESERVE_TOKENS_PASS3 || '1024'
-);
+// User-configurable settings
+export const MAX_REPOS_TO_PROCESS = (() => {
+  const value = parseInt(String(savedConfig.NEBULA_MAX_REPOS || '100'));
+  return isNaN(value) ? 10 : Math.max(1, Math.min(1000, value)); // Clamp between 1-1000
+})();
 
-// Model configuration - centralized environment variable handling
-export const NEBULA_MODEL = process.env.NEBULA_MODEL || 'openai/gpt-oss-20b';
-export const NEBULA_FALLBACK_MODELS = (
-  process.env.NEBULA_FALLBACK_MODELS || 'openai/gpt-oss-120b'
-)
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
+// Model configuration - user-manageable
+export const NEBULA_MODEL = (() => {
+  const model = String(savedConfig.NEBULA_MODEL || 'openai/gpt-oss-20b');
+  return model.length > 0 ? model : 'openai/gpt-oss-20b';
+})();
 
-// README generation configuration
-export const NEBULA_README_MIN_SIZE = parseInt(
-  process.env.NEBULA_README_MIN_SIZE || '1'
-);
+export const NEBULA_FALLBACK_MODELS = (() => {
+  if (savedConfig.NEBULA_FALLBACK_MODELS) {
+    if (Array.isArray(savedConfig.NEBULA_FALLBACK_MODELS)) {
+      return savedConfig.NEBULA_FALLBACK_MODELS.map((s: any) =>
+        String(s).trim()
+      ).filter((s: string) => s.length > 0);
+    } else {
+      return String(savedConfig.NEBULA_FALLBACK_MODELS)
+        .split(',')
+        .map((s: string) => s.trim())
+        .filter((s: string) => s.length > 0);
+    }
+  }
+  return ['openai/gpt-oss-120b'];
+})();
+
+// Internal defaults (not user-configurable)
+export const NEBULA_DEFAULT_CONTEXT = 128000;
+export const NEBULA_DEFAULT_OUTPUT = 8192;

@@ -132,17 +132,12 @@ your-project/
 
 ### Environment Variables
 
-| Variable                   | Default              | Description                       |
-| -------------------------- | -------------------- | --------------------------------- |
-| `GITHUB_TOKEN`             | Required             | GitHub Personal Access Token      |
-| `AI_GATEWAY_API_KEY`       | Required             | Vercel AI Gateway API Key         |
-| `NEBULA_MAX_REPOS`         | `10`                 | Maximum repositories to process   |
-| `NEBULA_BATCH`             | `6`                  | Batch size for processing         |
-| `NEBULA_MAX_README_TOKENS` | `16000`              | Max tokens per README             |
-| `NEBULA_MODEL`             | `openai/gpt-oss-20b` | AI Gateway model to use           |
-| `NEBULA_MIN_CAT_SIZE`      | `2`                  | Minimum repositories per category |
-| `NEBULA_MAX_CATEGORIES`    | `80`                 | Maximum number of categories      |
-| `NEBULA_README_MIN_SIZE`   | `0`                  | Minimum category size for README  |
+| Variable                 | Default               | Description                     |
+| ------------------------ | --------------------- | ------------------------------- |
+| `GITHUB_TOKEN`           | Required              | GitHub Personal Access Token    |
+| `NEBULA_MAX_REPOS`       | `100`                 | Maximum repositories to process |
+| `NEBULA_MODEL`           | `openai/gpt-oss-20b`  | AI model to use                 |
+| `NEBULA_FALLBACK_MODELS` | `openai/gpt-oss-120b` | Comma-separated fallback models |
 
 ### CLI Options
 

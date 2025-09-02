@@ -1,24 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import { render, Text, Box, Newline, useInput, useStdout } from 'ink';
+import TextInput from 'ink-text-input';
 import Spinner from 'ink-spinner';
 import { Effect, Console, Layer, ConfigProvider } from 'effect';
 import * as fs from 'node:fs/promises';
 import { z } from 'zod';
 import slugify from 'slugify';
+import { gateway } from '@ai-sdk/gateway';
 import { ensureAuthenticatedToken, removeToken, whoAmI } from './lib/auth';
 import {
   getRepoDetails,
   getRepoReadme,
-  listStarred,
   type DetailedRepo,
   type StarredRepo,
 } from './lib/github';
 import { batch, daysSince } from './lib/utils';
-import {
-  MAX_REPOS_TO_PROCESS,
-  NEBULA_BATCH,
-  NEBULA_README_MIN_SIZE,
-} from './lib/config';
+import { MAX_REPOS_TO_PROCESS, NEBULA_MODEL } from './lib/config';
 import {
   RepoFeature,
   NebulaStore,
@@ -42,6 +39,520 @@ import { aiPass2StreamlineStreaming } from './lib/ai';
 import { aiPass25BudgetConsolidate } from './lib/ai';
 import { aiPass3QualityAssuranceStreaming } from './lib/ai';
 import { QaFix, Category } from './lib/schemas';
+
+// Configuration options for interactive setup
+interface ConfigOption {
+  key: string;
+  label: string;
+  defaultValue: string;
+  description: string;
+  isRequired?: boolean;
+  isSecret?: boolean;
+  type?: 'text' | 'model-select';
+}
+
+const CONFIG_OPTIONS: ConfigOption[] = [
+  {
+    key: 'NEBULA_MAX_REPOS',
+    label: 'Maximum Repositories to Process',
+    defaultValue: String(MAX_REPOS_TO_PROCESS),
+    description:
+      'How many starred repositories to analyze (higher = more comprehensive but slower)',
+    type: 'text',
+  },
+  {
+    key: 'NEBULA_MODEL',
+    label: 'AI Model',
+    defaultValue: String(NEBULA_MODEL),
+    description: 'AI model for processing (affects quality and speed)',
+    type: 'model-select',
+  },
+];
+
+// Model Selection Component
+const ModelSelector: React.FC<{
+  onModelSelect: (modelId: string) => void;
+  currentValue: string;
+  onCancel: () => void;
+}> = ({ onModelSelect, currentValue, onCancel }) => {
+  const [availableModels, setAvailableModels] = useState<any[]>([]);
+  const [providers, setProviders] = useState<string[]>([]);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selectionStep, setSelectionStep] = useState<'provider' | 'model'>(
+    'provider'
+  );
+  const { stdout } = useStdout();
+  const contentWidth = Math.min((stdout?.columns ?? 80) - 4, 100);
+
+  useEffect(() => {
+    const fetchModels = async () => {
+      try {
+        const result = await gateway.getAvailableModels();
+        const languageModels = result.models.filter(
+          (m: any) => m.modelType === 'language'
+        );
+        setAvailableModels(languageModels);
+
+        // Extract unique providers - try different field names
+        const uniqueProviders = [
+          ...new Set(
+            languageModels.map((m: any) => {
+              // Try different possible provider field names
+              return (
+                m.provider ||
+                m.providerName ||
+                m.company ||
+                m.vendor ||
+                (m.id && m.id.includes('/') ? m.id.split('/')[0] : 'Unknown')
+              );
+            })
+          ),
+        ].filter((p) => p !== 'Unknown');
+
+        // If no providers found through fields, try extracting from model IDs
+        let finalProviders = uniqueProviders;
+        if (finalProviders.length === 0) {
+          finalProviders = [
+            ...new Set(
+              languageModels.map((m: any) =>
+                m.id && m.id.includes('/') ? m.id.split('/')[0] : 'Unknown'
+              )
+            ),
+          ].filter((p) => p !== 'Unknown');
+        }
+
+        setProviders(finalProviders.sort());
+
+        // If current model is selected, pre-select its provider but stay in provider selection
+        const currentModel = languageModels.find(
+          (m: any) => m.id === currentValue
+        );
+        if (currentModel) {
+          const currentProvider =
+            currentModel.id && currentModel.id.includes('/')
+              ? currentModel.id.split('/')[0]
+              : 'Unknown';
+          if (
+            currentProvider !== 'Unknown' &&
+            finalProviders.includes(currentProvider)
+          ) {
+            // Pre-select the current provider but stay in provider selection step
+            const providerIndex = finalProviders.indexOf(currentProvider);
+            if (providerIndex >= 0) {
+              setSelectedIndex(providerIndex);
+            }
+          }
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to fetch models');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchModels();
+  }, [currentValue]);
+
+  useInput((input, key) => {
+    if (loading) return;
+
+    if (key.upArrow || input === 'k') {
+      const maxIndex =
+        selectionStep === 'provider'
+          ? providers.length - 1
+          : filteredModels.length - 1;
+      setSelectedIndex((prev) => Math.max(0, prev - 1));
+    } else if (key.downArrow || input === 'j') {
+      const maxIndex =
+        selectionStep === 'provider'
+          ? providers.length - 1
+          : filteredModels.length - 1;
+      setSelectedIndex((prev) => Math.min(maxIndex, prev + 1));
+    } else if (key.return) {
+      if (selectionStep === 'provider') {
+        // Select provider and move to model selection
+        const selectedProviderName = providers[selectedIndex];
+        setSelectedProvider(selectedProviderName || '');
+        setSelectionStep('model');
+        setSelectedIndex(0);
+      } else {
+        // Select model
+        if (filteredModels[selectedIndex]) {
+          onModelSelect(filteredModels[selectedIndex].id);
+        }
+      }
+    } else if (
+      (input === 'd' || input === 's') &&
+      selectionStep === 'provider'
+    ) {
+      // Use default model directly from provider selection
+      onModelSelect(currentValue);
+    } else if ((input === 'd' || input === 's') && selectionStep === 'model') {
+      // Select default model - check if it's in current filtered list first
+      const defaultModel = filteredModels.find(
+        (m: any) => m.id === currentValue
+      );
+      if (defaultModel) {
+        const defaultIndex = filteredModels.indexOf(defaultModel);
+        setSelectedIndex(defaultIndex);
+        onModelSelect(currentValue);
+      } else {
+        // If default model is not in current provider, just use it directly
+        onModelSelect(currentValue);
+      }
+    } else if (key.escape) {
+      // Always go back to the configuration step, not restart config
+      onCancel();
+    } else if (input === 'b' && selectionStep === 'model') {
+      // Go back to provider selection within model selector
+      setSelectionStep('provider');
+      setSelectedIndex(providers.indexOf(selectedProvider || ''));
+    }
+  });
+
+  // Filter models by selected provider
+  const filteredModels = selectedProvider
+    ? availableModels.filter((m: any) => {
+        const modelProvider =
+          m.provider ||
+          m.providerName ||
+          m.company ||
+          m.vendor ||
+          (m.id && m.id.includes('/') ? m.id.split('/')[0] : 'Unknown');
+        return modelProvider === selectedProvider;
+      })
+    : [];
+
+  // Helper function to format pricing per million tokens
+  const formatPricePerMillion = (pricePerToken: number): string => {
+    return (pricePerToken * 1000000).toFixed(2);
+  };
+
+  if (loading) {
+    return (
+      <Box flexDirection="column" width={contentWidth}>
+        <Text color="cyan">Loading available models...</Text>
+        <Spinner type="dots" />
+        <Text color="gray" dimColor>
+          Press ESC to return to configuration
+        </Text>
+      </Box>
+    );
+  }
+
+  if (error) {
+    return (
+      <Box flexDirection="column" width={contentWidth}>
+        <Text color="red">Error loading models: {error}</Text>
+        <Text color="gray">Press ESC to return to configuration</Text>
+      </Box>
+    );
+  }
+
+  return (
+    <Box flexDirection="column" width={contentWidth}>
+      <Text color="yellow" bold>
+        {selectionStep === 'provider'
+          ? 'Select Provider'
+          : `Select Model from ${selectedProvider}`}
+      </Text>
+      <Text color="gray" dimColor>
+        {selectionStep === 'provider'
+          ? '↑↓ to navigate, ENTER to select, S/D for default (if available), ESC to go back'
+          : '↑↓ to navigate, ENTER to select, S/D for default, ESC to go back, B for providers'}
+      </Text>
+      {selectionStep === 'provider' && (
+        <Text color="cyan" dimColor>
+          💡 Tip: Select your AI provider, then choose your preferred model
+        </Text>
+      )}
+      {selectionStep === 'model' && (
+        <Text color="cyan" dimColor>
+          💡 Tip: Press S or D to use default model, or browse available models
+        </Text>
+      )}
+      <Newline />
+
+      {selectionStep === 'provider' ? (
+        // Provider Selection
+        <Box flexDirection="column">
+          <Text color="cyan" bold>
+            Available Providers:
+          </Text>
+          {providers.map((provider, index) => {
+            const providerModels = availableModels.filter((m: any) => {
+              const modelProvider =
+                m.provider ||
+                m.providerName ||
+                m.company ||
+                m.vendor ||
+                (m.id && m.id.includes('/') ? m.id.split('/')[0] : 'Unknown');
+              return modelProvider === provider;
+            });
+            return (
+              <Text
+                key={provider}
+                color={index === selectedIndex ? 'green' : 'gray'}
+              >
+                {index === selectedIndex ? '→ ' : '  '}
+                {provider} ({providerModels.length} models)
+              </Text>
+            );
+          })}
+        </Box>
+      ) : (
+        // Model Selection
+        <>
+          {filteredModels[selectedIndex] && (
+            <Box flexDirection="column" paddingX={2} marginBottom={1}>
+              <Text color="green" bold>
+                {filteredModels[selectedIndex].name ||
+                  filteredModels[selectedIndex].id}
+              </Text>
+              {filteredModels[selectedIndex].description && (
+                <Text color="gray" dimColor>
+                  {filteredModels[selectedIndex].description}
+                </Text>
+              )}
+              {filteredModels[selectedIndex].pricing && (
+                <Box flexDirection="column" marginTop={1}>
+                  <Text color="cyan" bold>
+                    Pricing (per million tokens):
+                  </Text>
+                  <Text color="white">
+                    Input: $
+                    {formatPricePerMillion(
+                      filteredModels[selectedIndex].pricing.input
+                    )}
+                  </Text>
+                  <Text color="white">
+                    Output: $
+                    {formatPricePerMillion(
+                      filteredModels[selectedIndex].pricing.output
+                    )}
+                  </Text>
+                  {filteredModels[selectedIndex].pricing.cachedInputTokens && (
+                    <Text color="white">
+                      Cached Input: $
+                      {formatPricePerMillion(
+                        filteredModels[selectedIndex].pricing.cachedInputTokens
+                      )}
+                    </Text>
+                  )}
+                  {filteredModels[selectedIndex].pricing
+                    .cacheCreationInputTokens && (
+                    <Text color="white">
+                      Cache Creation: $
+                      {formatPricePerMillion(
+                        filteredModels[selectedIndex].pricing
+                          .cacheCreationInputTokens
+                      )}
+                    </Text>
+                  )}
+                </Box>
+              )}
+            </Box>
+          )}
+
+          <Box flexDirection="column" marginTop={1}>
+            <Text color="cyan" bold>
+              Models from {selectedProvider}:
+            </Text>
+            {filteredModels.map((model, index) => (
+              <Text
+                key={model.id}
+                color={index === selectedIndex ? 'green' : 'gray'}
+              >
+                {index === selectedIndex ? '→ ' : '  '}
+                {model.name || model.id}
+                {model.pricing && (
+                  <Text color="magenta">
+                    {' '}
+                    (${formatPricePerMillion(model.pricing.input)}/$
+                    {formatPricePerMillion(model.pricing.output)})
+                  </Text>
+                )}
+              </Text>
+            ))}
+          </Box>
+        </>
+      )}
+    </Box>
+  );
+};
+
+// Interactive Configuration Component
+const InteractiveConfigApp: React.FC<{
+  onConfigComplete: (config: Record<string, string>) => void;
+}> = ({ onConfigComplete }) => {
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [configValues, setConfigValues] = useState<Record<string, string>>({});
+  const [inputValue, setInputValue] = useState('');
+  const [showInput, setShowInput] = useState(false);
+  const [showModelSelector, setShowModelSelector] = useState(false);
+  const { stdout } = useStdout();
+  const contentWidth = Math.min((stdout?.columns ?? 80) - 4, 100);
+
+  const currentOption = CONFIG_OPTIONS[currentIndex];
+
+  // Guard against invalid index
+  if (!currentOption) {
+    return (
+      <Box flexDirection="column" width={contentWidth}>
+        <Text color="red">Error: Invalid configuration option index</Text>
+      </Box>
+    );
+  }
+
+  useInput((input, key) => {
+    if (key.return) {
+      if (currentOption.type === 'model-select' && !showInput) {
+        setShowModelSelector(true);
+      } else if (showInput) {
+        // Save current input and move to next
+        const newConfig = {
+          ...configValues,
+          [currentOption.key]: inputValue || currentOption.defaultValue,
+        };
+        setConfigValues(newConfig);
+        setInputValue('');
+
+        if (currentIndex < CONFIG_OPTIONS.length - 1) {
+          setCurrentIndex(currentIndex + 1);
+          setShowInput(false);
+        } else {
+          // Configuration complete
+          onConfigComplete(newConfig);
+        }
+      } else {
+        setShowInput(true);
+        setInputValue(currentOption.defaultValue);
+      }
+    } else if (input === 's' && !showInput) {
+      // Skip to default for any option
+      const newConfig = {
+        ...configValues,
+        [currentOption.key]: currentOption.defaultValue,
+      };
+      setConfigValues(newConfig);
+
+      if (currentIndex < CONFIG_OPTIONS.length - 1) {
+        setCurrentIndex(currentIndex + 1);
+        setShowInput(false);
+      } else {
+        onConfigComplete(newConfig);
+      }
+    } else if (key.escape) {
+      // Go back to previous option
+      if (currentIndex > 0) {
+        setCurrentIndex(currentIndex - 1);
+        setShowInput(false);
+        setShowModelSelector(false);
+        setInputValue('');
+      }
+    }
+  });
+
+  const progress = ((currentIndex + 1) / CONFIG_OPTIONS.length) * 100;
+
+  // Show model selector if active
+  if (showModelSelector && currentOption.type === 'model-select') {
+    return (
+      <ModelSelector
+        onModelSelect={(modelId) => {
+          const newConfig = {
+            ...configValues,
+            [currentOption.key]: modelId,
+          };
+          setConfigValues(newConfig);
+          setShowModelSelector(false);
+
+          if (currentIndex < CONFIG_OPTIONS.length - 1) {
+            setCurrentIndex(currentIndex + 1);
+          } else {
+            onConfigComplete(newConfig);
+          }
+        }}
+        currentValue={
+          configValues[currentOption.key] || currentOption.defaultValue
+        }
+        onCancel={() => setShowModelSelector(false)}
+      />
+    );
+  }
+
+  return (
+    <Box flexDirection="column" width={contentWidth}>
+      <Text color="blue" bold>
+        ⚙️ Nebula Configuration Setup
+      </Text>
+      <Newline />
+
+      <Box flexDirection="column" marginBottom={1}>
+        <Text color="cyan">
+          Progress: {currentIndex + 1} of {CONFIG_OPTIONS.length} settings
+        </Text>
+        <Text color="green">
+          █{'█'.repeat(Math.floor(progress / 5))}
+          {'░'.repeat(20 - Math.floor(progress / 5))} {Math.round(progress)}%
+        </Text>
+      </Box>
+
+      <Newline />
+
+      <Box flexDirection="column" paddingX={2}>
+        <Text color="yellow" bold>
+          {currentOption.label}
+        </Text>
+        <Text color="gray" dimColor>
+          {currentOption.description}
+        </Text>
+        <Newline />
+
+        {!showInput ? (
+          <Box flexDirection="column">
+            <Text color="green">
+              Current:{' '}
+              {currentOption.isSecret
+                ? '••••••••'
+                : configValues[currentOption.key] || currentOption.defaultValue}
+            </Text>
+            <Newline />
+            <Text color="cyan">
+              {currentOption.type === 'model-select'
+                ? 'Press ENTER to browse models • Press S to use default • ESC to go back'
+                : 'Press ENTER to customize • Press S to use default • ESC to go back'}
+            </Text>
+          </Box>
+        ) : (
+          <Box flexDirection="column">
+            <Text color="cyan">Enter value (or press ENTER for default):</Text>
+            <Box>
+              <Text color="green">{'> '}</Text>
+              <TextInput
+                value={inputValue}
+                onChange={setInputValue}
+                mask={currentOption.isSecret ? '*' : undefined}
+                placeholder={currentOption.defaultValue}
+              />
+            </Box>
+            <Text color="gray" dimColor>
+              Press ENTER to confirm
+            </Text>
+          </Box>
+        )}
+      </Box>
+
+      <Newline />
+      <Text color="gray" dimColor>
+        Tip: You can re-run this setup anytime with 'nebula config'
+      </Text>
+    </Box>
+  );
+};
 
 // --------------------------------- Builder ----------------------------------
 function toRepoFeatures(
@@ -536,7 +1047,7 @@ const NebulaStreamingApp: React.FC<{
         setAiPhase('pass1');
         let merged: any = null;
         try {
-          const batches = batch(repoFeatures, NEBULA_BATCH);
+          const batches = batch(repoFeatures, 4);
           setTotalBatches(batches.length);
 
           const expandPlans: z.infer<typeof ExpandPlanPlus>[] = [];
@@ -822,8 +1333,8 @@ const NebulaStreamingApp: React.FC<{
         setAiPhase('pass2');
         try {
           const budget = {
-            min: parseInt(process.env.NEBULA_CAT_TARGET_MIN || '22'),
-            max: parseInt(process.env.NEBULA_CAT_TARGET_MAX || '36'),
+            min: 22,
+            max: 36,
           };
           const budgetGen = aiPass25BudgetConsolidate(
             store,
@@ -909,7 +1420,7 @@ const NebulaStreamingApp: React.FC<{
           JSON.stringify(store, null, 2),
           'utf-8'
         );
-        const md = renderReadme(store, repoFeatures, NEBULA_README_MIN_SIZE);
+        const md = renderReadme(store, repoFeatures, 1);
         await fs.writeFile(outputFilename, md, 'utf-8');
 
         setCurrentPhase('complete');
@@ -1343,6 +1854,35 @@ const NebulaStreamingApp: React.FC<{
   );
 };
 
+// Configuration file utilities
+const CONFIG_FILE_PATH = '.nebula/config.json';
+
+const loadSavedConfig = async (): Promise<Record<string, string> | null> => {
+  try {
+    const configData = await fs.readFile(CONFIG_FILE_PATH, 'utf-8');
+    return JSON.parse(configData);
+  } catch {
+    return null;
+  }
+};
+
+const saveConfig = async (config: Record<string, string>): Promise<void> => {
+  await fs.mkdir('.nebula', { recursive: true });
+  await fs.writeFile(
+    CONFIG_FILE_PATH,
+    JSON.stringify(config, null, 2),
+    'utf-8'
+  );
+};
+
+const applyConfigToEnv = (config: Record<string, string>): void => {
+  for (const [key, value] of Object.entries(config)) {
+    if (value) {
+      process.env[key] = value;
+    }
+  }
+};
+
 // ----------------------------------- CLI -----------------------------------
 const main = Effect.gen(function* () {
   const [, , ...args] = process.argv;
@@ -1350,6 +1890,7 @@ const main = Effect.gen(function* () {
   // Parse command-line arguments
   let outputFilename = 'AWESOME.md';
   let cmd = args[0];
+  let skipConfig = false;
 
   // Check for --name parameter
   for (let i = 0; i < args.length; i++) {
@@ -1362,11 +1903,77 @@ const main = Effect.gen(function* () {
     }
   }
 
+  // Check for --skip-config flag
+  if (args.includes('--skip-config')) {
+    skipConfig = true;
+  }
+
   if (cmd === 'logout') {
     yield* removeToken;
     console.log('🗑️  Removed saved token.');
     return;
   }
+
+  if (cmd === 'config') {
+    // Force interactive configuration
+    skipConfig = false;
+  }
+
+  // Load saved configuration and apply to environment
+  const savedConfig = yield* Effect.tryPromise({
+    try: () => loadSavedConfig(),
+    catch: () => null,
+  });
+
+  if (savedConfig && cmd !== 'config') {
+    applyConfigToEnv(savedConfig);
+    console.log('✅ Loaded saved configuration from .nebula/config.json');
+    console.log('\n📋 Current Configuration:');
+    for (const [key, value] of Object.entries(savedConfig)) {
+      const configOption = CONFIG_OPTIONS.find((opt) => opt.key === key);
+      const displayName = configOption?.label || key;
+      const displayValue = key.toLowerCase().includes('token')
+        ? '••••••••'
+        : value;
+      console.log(`  ${displayName}: ${displayValue}`);
+    }
+    console.log('');
+  }
+
+  // Interactive configuration setup (unless skipped)
+  if (!skipConfig && (!savedConfig || cmd === 'config')) {
+    const configPromise = new Promise<Record<string, string>>((resolve) => {
+      const { waitUntilExit } = render(
+        <InteractiveConfigApp onConfigComplete={resolve} />
+      );
+    });
+
+    const userConfig = yield* Effect.tryPromise({
+      try: () => configPromise,
+      catch: (e) => {
+        console.error('Configuration setup failed:', e);
+        process.exit(1);
+      },
+    });
+
+    // Save configuration
+    yield* Effect.tryPromise({
+      try: () => saveConfig(userConfig),
+      catch: (e) => console.warn('Failed to save configuration:', e),
+    });
+
+    // Apply to environment
+    applyConfigToEnv(userConfig);
+
+    if (cmd === 'config') {
+      console.log(
+        '✅ Configuration saved! You can now run nebula without the config command.'
+      );
+      return;
+    }
+  }
+
+  // GitHub token will be handled by the existing authentication flow
 
   // Get authenticated token using the abstracted utility
   const token = yield* ensureAuthenticatedToken({
