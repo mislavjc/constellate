@@ -2,7 +2,7 @@
 
 // Load environment variables first
 try {
-  require('dotenv').config();
+  require('dotenv').config({ quiet: true });
 } catch (e) {
   // dotenv not available, continue without it
 }
