@@ -1,6 +1,6 @@
-<center>
+# 🌌 Constellator
 
-```
+```text
          .    *   .  .  *    .    *   .
      .     *      .    *      .     *    .
   *    .     *   .     *    .     *   .   *
@@ -13,20 +13,15 @@
        .    *      .    *      .    *
 ```
 
-</center>
+**Turn your GitHub stars into a clean, categorized Awesome list.**
 
-# 🌌 Constellator
-
-**Transform your GitHub stars into beautifully organized, AI-curated collections**
-
-Constellator is a powerful CLI tool that analyzes your GitHub starred repositories using advanced AI and automatically organizes them into meaningful categories. It creates an "awesome list" style markdown file with intelligent categorization, summaries, and metadata.
+Constellator analyzes your starred repositories and generates an Awesome‑style markdown with clear categories, concise summaries, and sensible ordering.
 
 ## ✨ Features
 
-- 🤖 **AI-Powered Categorization**: Uses Vercel AI Gateway with OpenAI GPT-OSS models to intelligently categorize repositories
+- 🤖 **AI-Powered Categorization**: Uses Vercel AI Gateway with GPT-OSS models to intelligently categorize repositories
 - 📊 **Multi-Pass Processing**: Advanced 4-pass AI pipeline for accurate classification
 - 🎨 **Beautiful Output**: Generates clean, organized markdown files
-- ⚡ **Fast & Modern**: Built with Bun runtime for optimal performance
 - 🎯 **Customizable**: Flexible output filename and configuration options
 - 🔄 **Incremental Updates**: Efficient processing with data persistence
 - 📈 **Quality Metrics**: Includes star counts, activity indicators, and confidence scores
@@ -34,123 +29,82 @@ Constellator is a powerful CLI tool that analyzes your GitHub starred repositori
 
 ## 🚀 Quick Start
 
-### Prerequisites
+### One‑liner
 
-- [Bun](https://bun.sh/) (recommended) or Node.js
-- GitHub Personal Access Token with `repo` scope
-- Vercel AI Gateway API key
+```bash
+npx constellator
+```
 
-### Installation
+This authenticates with GitHub, fetches your stars, runs a multi‑pass AI pipeline, and writes `AWESOME.md`.
 
-1. **Clone the repository:**
+### Configure (recommended)
 
-   ```bash
-   git clone <your-repo-url>
-   cd constellator
-   ```
+```bash
+# Create/edit .constellator/config.json interactively
+npx constellator config
+```
 
-2. **Install dependencies:**
+Required:
 
-   ```bash
-   bun install
-   ```
-
-3. **Set up environment variables (.env file):**
-
-   ```bash
-   # Only the Vercel AI Gateway API key goes in .env
-   echo "AI_GATEWAY_API_KEY=your_vercel_ai_gateway_api_key_here" > .env
-   ```
-
-4. **Configure application settings (.constellator/config.json):**
-
-   ```bash
-   # Run initial setup to create .constellator/config.json
-   bun run index.tsx config
-
-   # Or manually create the config file:
-   mkdir -p .constellator
-   cat > .constellator/config.json << EOF
-   {
-     "CONSTELLATE_MAX_REPOS": "100",
-     "CONSTELLATE_MODEL": "openai/gpt-4o-mini",
-     "CONSTELLATE_FALLBACK_MODELS": ["openai/gpt-3.5-turbo", "openai/gpt-4"],
-     "GITHUB_TOKEN": "your_github_personal_access_token_here"
-   }
-   EOF
-   ```
+- GitHub Personal Access Token with `repo` scope (stored in `.constellator/config.json`)
+- Vercel AI Gateway key (stored in `.env` as `AI_GATEWAY_API_KEY`)
 
 ### Usage
 
-**First-time setup:**
+#### First-time setup
 
 ```bash
 # Configure your settings interactively
-bun run index.tsx config
-
-# Or manually set up your configuration files as shown above
+npx constellator config
 ```
 
-**Basic usage (creates AWESOME.md):**
+#### Run (creates AWESOME.md)
 
 ```bash
-bun run index.tsx
-```
-
-**Custom output filename:**
-
-```bash
-bun run index.tsx --name MY_STARS.md
-```
-
-**Alternative execution methods:**
-
-```bash
-# Using npx (after publishing or linking locally)
 npx constellator
-
-# Using bunx
-bunx constellator
-
-# Direct execution
-node cli.cjs
 ```
 
-**Authentication (if needed):**
+#### Custom output filename
 
 ```bash
-bun run index.tsx login
+npx constellator --name MY_STARS.md
 ```
 
-**Logout and clear stored token:**
+#### Authentication (if needed)
 
 ```bash
-bun run index.tsx logout
+npx constellator login
+```
+
+#### Logout and clear stored token
+
+```bash
+npx constellator logout
 ```
 
 ## 🎯 How It Works
 
 Constellator uses a sophisticated 4-pass AI processing pipeline:
 
-### Pass 0: Facts Extraction
+### Pass 0 — Facts Extraction
 
 - Analyzes repository README files
 - Extracts key facts, capabilities, and tech stack
 - Identifies repository purpose and features
 
-### Pass 1: Expansion & Summaries
+### Pass 1 — Expansion & Summaries
 
 - Generates concise repository summaries
 - Creates key topic tags
 - Proposes initial category candidates
 
-### Pass 2: Streamline & Primary Assignment
+### Pass 2 — Streamline & Primary Assignment
 
 - Merges overlapping categories
 - Assigns exactly one primary category per repository
 - Ensures consistent categorization
 
-### Pass 3: Quality Assurance
+### Pass 3 — Quality Assurance
 
 - Validates category assignments
 - Handles edge cases and misclassifications
@@ -160,7 +114,7 @@ Constellator uses a sophisticated 4-pass AI processing pipeline:
 
 Constellator generates several files in your project directory:
 
-```
+```text
 your-project/
 ├── AWESOME.md                    # Main categorized list (or custom name)
 ├── .constellator/
@@ -186,7 +140,7 @@ Constellator uses two configuration files:
 
 #### 1. Environment Variables (.env)
 
-**Only the Vercel AI Gateway API key goes here:**
+Only the Vercel AI Gateway API key goes here
 
 ```bash
 # .env file - only for Vercel AI Gateway
@@ -195,7 +149,7 @@ AI_GATEWAY_API_KEY=vck_your_vercel_ai_gateway_key_here
 
 #### 2. Application Settings (.constellator/config.json)
 
-**All other configuration goes here:**
+All other configuration goes here
 
 ```json
 {
@@ -208,9 +162,9 @@ AI_GATEWAY_API_KEY=vck_your_vercel_ai_gateway_key_here
 
 ### Configuration Options
 
-| Variable                      | File                       | Default                | Description                     |
-| ----------------------------- | -------------------------- | ---------------------- | ------------------------------- |
-| `AI_GATEWAY_API_KEY`          | `.env`                     | Required               | Vercel AI Gateway API key       |
+| Variable                      | File                        | Default                | Description                     |
+| ----------------------------- | --------------------------- | ---------------------- | ------------------------------- |
+| `AI_GATEWAY_API_KEY`          | `.env`                      | Required               | Vercel AI Gateway API key       |
 | `GITHUB_TOKEN`                | `.constellator/config.json` | Required               | GitHub Personal Access Token    |
 | `CONSTELLATE_MAX_REPOS`       | `.constellator/config.json` | `100`                  | Maximum repositories to process |
 | `CONSTELLATE_MODEL`           | `.constellator/config.json` | `openai/gpt-4o-mini`   | Primary AI model to use         |
@@ -218,11 +172,11 @@ AI_GATEWAY_API_KEY=vck_your_vercel_ai_gateway_key_here
 
 ### CLI Options
 
-| Option              | Description                      | Example                    |
-| ------------------- | -------------------------------- | -------------------------- |
-| `--name <filename>` | Custom output filename           | `--name MY_AWESOME.md`     |
-| `login`             | Interactive authentication setup | `bun run index.tsx login`  |
-| `logout`            | Clear stored credentials         | `bun run index.tsx logout` |
+| Option              | Description                      | Example                   |
+| ------------------- | -------------------------------- | ------------------------- |
+| `--name <filename>` | Custom output filename           | `--name MY_AWESOME.md`    |
+| `login`             | Interactive authentication setup | `npx constellator login`  |
+| `logout`            | Clear stored credentials         | `npx constellator logout` |
 
 ## 🎨 Example Output
 
@@ -251,7 +205,7 @@ Advanced AI agent framework for autonomous task execution.
 
 ### Project Structure
 
-```
+```text
 constellator/
 ├── index.tsx              # Main CLI application
 ├── cli.cjs               # Executable wrapper script
@@ -272,24 +226,13 @@ constellator/
 └── package.json          # Package configuration
 ```
 
-### Building & Running
-
-**Development mode:**
+### Running locally (development)
 
 ```bash
-bun --hot index.tsx
-```
-
-**Production build:**
-
-```bash
-bun build index.tsx
-```
-
-### Testing
-
-```bash
-bun test
+git clone https://github.com/mislavjc/constellator
+cd constellator
+pnpm install # or npm/yarn
+npx ts-node index.tsx
 ```
 
 ## 🤝 Contributing
@@ -306,7 +249,6 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## 🙏 Acknowledgments
 
-- Built with [Bun](https://bun.sh/) for modern JavaScript runtime
 - Uses [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) for AI processing
 - Terminal UI powered by [Ink](https://github.com/vadimdemedes/ink)
 
@@ -331,7 +273,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 **"Configuration not found"**
 
-- Run `bun run index.tsx config` to set up your configuration
+- Run `npx constellator config` to set up your configuration
 - Ensure `.constellator/config.json` exists with proper settings
 - Make sure `.env` contains your `AI_GATEWAY_API_KEY`
 
@@ -343,4 +285,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ---
 
-**Made with ❤️ and powered by AI**
+Made with ❤️ and powered by AI
