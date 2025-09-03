@@ -448,6 +448,7 @@ const InteractiveConfigApp: React.FC<{
   const [configValues, setConfigValues] = useState<Record<string, string>>({});
   const [inputValue, setInputValue] = useState('');
   const [showModelSelector, setShowModelSelector] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
 
   const currentOption = CONFIG_OPTIONS[currentIndex];
 
@@ -462,13 +463,73 @@ const InteractiveConfigApp: React.FC<{
 
   const progress = ((currentIndex + 1) / CONFIG_OPTIONS.length) * 100;
 
+  // Helper: find option definition by key
+  const getOptionByKey = (key: string) =>
+    CONFIG_OPTIONS.find((opt) => opt.key === key);
+
+  // Compute effective (possibly derived) default values based on earlier answers
+  const getEffectiveDefault = (key: string): string => {
+    const base = getOptionByKey(key)?.defaultValue ?? '';
+    const maxReposStr =
+      configValues['CONSTELLATE_MAX_REPOS'] ||
+      getOptionByKey('CONSTELLATE_MAX_REPOS')?.defaultValue ||
+      String(MAX_REPOS_TO_PROCESS);
+    const maxRepos = Math.max(
+      1,
+      parseInt(maxReposStr || '0') || MAX_REPOS_TO_PROCESS
+    );
+
+    const clamp = (v: number, lo: number, hi: number) =>
+      Math.min(hi, Math.max(lo, Math.round(v)));
+
+    if (key === 'CONSTELLATE_MAX_CATEGORIES') {
+      // Roughly 1 category per ~10 repos, within 8–200 bounds
+      const recommended = clamp(maxRepos / 10, 8, 200);
+      return String(recommended);
+    }
+    if (key === 'CONSTELLATE_MIN_CAT_SIZE') {
+      // Scale with repo count; 1–10
+      const recommended = clamp(maxRepos / 50, 1, 10);
+      return String(recommended);
+    }
+    if (key === 'CONSTELLATE_MAX_NEW_CATEGORIES') {
+      // Allow fewer new categories than overall max; 16–200
+      const recommended = clamp(maxRepos / 12, 16, 200);
+      return String(recommended);
+    }
+    return base;
+  };
+
+  // Clamp numeric inputs for known numeric options
+  const sanitizeValue = (key: string, value: string): string => {
+    const asNum = parseInt(value, 10);
+    if (Number.isNaN(asNum)) return value;
+    const clamp = (v: number, lo: number, hi: number) =>
+      Math.min(hi, Math.max(lo, Math.round(v)));
+    switch (key) {
+      case 'CONSTELLATE_MAX_REPOS':
+        return String(clamp(asNum, 1, 5000));
+      case 'CONSTELLATE_MAX_CATEGORIES':
+        return String(clamp(asNum, 8, 200));
+      case 'CONSTELLATE_MIN_CAT_SIZE':
+        return String(clamp(asNum, 1, 10));
+      case 'CONSTELLATE_MAX_NEW_CATEGORIES':
+        return String(clamp(asNum, 16, 200));
+      default:
+        return value;
+    }
+  };
+
   const handleNext = (value: string) => {
     const newConfig = {
       ...configValues,
-      [currentOption.key]: value || currentOption.defaultValue,
+      [currentOption.key]: value
+        ? sanitizeValue(currentOption.key, value)
+        : getEffectiveDefault(currentOption.key),
     };
     setConfigValues(newConfig);
     setInputValue('');
+    setIsEditing(false);
 
     if (currentIndex < CONFIG_OPTIONS.length - 1) {
       setCurrentIndex(currentIndex + 1);
@@ -481,9 +542,11 @@ const InteractiveConfigApp: React.FC<{
   const handleSkip = () => {
     const newConfig = {
       ...configValues,
-      [currentOption.key]: currentOption.defaultValue,
+      [currentOption.key]: getEffectiveDefault(currentOption.key),
     };
     setConfigValues(newConfig);
+    setIsEditing(false);
+    setInputValue('');
 
     if (currentIndex < CONFIG_OPTIONS.length - 1) {
       setCurrentIndex(currentIndex + 1);
@@ -496,11 +559,27 @@ const InteractiveConfigApp: React.FC<{
     if (key.tab) {
       // Skip to default for any option
       handleSkip();
-    } else if (key.escape && currentIndex > 0) {
-      // Go back to previous option
-      setCurrentIndex(currentIndex - 1);
-      setShowModelSelector(false);
-      setInputValue('');
+    } else if (key.escape) {
+      if (isEditing) {
+        setIsEditing(false);
+        setInputValue('');
+      } else if (currentIndex > 0) {
+        // Go back to previous option
+        setCurrentIndex(currentIndex - 1);
+        setShowModelSelector(false);
+        setInputValue('');
+      }
+    } else if (key.return) {
+      if (currentOption.type === 'model-select') {
+        setShowModelSelector(true);
+      } else if (!isEditing) {
+        // Begin editing this option
+        const existing =
+          configValues[currentOption.key] ||
+          getEffectiveDefault(currentOption.key);
+        setInputValue(String(existing));
+        setIsEditing(true);
+      }
     }
   });
 
@@ -513,7 +592,8 @@ const InteractiveConfigApp: React.FC<{
           setShowModelSelector(false);
         }}
         currentValue={
-          configValues[currentOption.key] || currentOption.defaultValue
+          configValues[currentOption.key] ||
+          getEffectiveDefault(currentOption.key)
         }
         onCancel={() => setShowModelSelector(false)}
       />
@@ -547,7 +627,8 @@ const InteractiveConfigApp: React.FC<{
             Current value:{' '}
             {currentOption.isSecret
               ? '••••••••'
-              : configValues[currentOption.key] || currentOption.defaultValue}
+              : configValues[currentOption.key] ||
+                getEffectiveDefault(currentOption.key)}
           </Text>
         </Box>
 
@@ -556,35 +637,50 @@ const InteractiveConfigApp: React.FC<{
             <Box marginBottom={1}>
               <Text color="cyan">Choose your AI model:</Text>
             </Box>
-            <Box marginBottom={1}>
-              <TextInput
-                value=""
-                onChange={() => {}}
-                placeholder="Press ENTER to browse models..."
-                onSubmit={() => setShowModelSelector(true)}
-              />
-            </Box>
             <Text color="gray" dimColor>
-              Press ENTER to select model • Press TAB to use default • ESC to go
-              back
+              Press ENTER to browse models • Press TAB to use default • ESC to
+              go back
             </Text>
           </Box>
         ) : (
           <Box flexDirection="column">
-            <Box marginBottom={1}>
-              <Text color="cyan">Enter new value:</Text>
-            </Box>
-            <Box marginBottom={1}>
-              <TextInput
-                value={inputValue}
-                onChange={setInputValue}
-                placeholder={currentOption.defaultValue}
-                onSubmit={handleNext}
-              />
-            </Box>
-            <Text color="gray" dimColor>
-              Press ENTER to confirm • Press TAB to use default • ESC to go back
-            </Text>
+            {!isEditing ? (
+              <>
+                <Text color="gray" dimColor>
+                  Press ENTER to edit • Press TAB to use recommended • ESC to go
+                  back
+                </Text>
+                {[
+                  'CONSTELLATE_MAX_CATEGORIES',
+                  'CONSTELLATE_MIN_CAT_SIZE',
+                  'CONSTELLATE_MAX_NEW_CATEGORIES',
+                ].includes(currentOption.key) && (
+                  <Box marginTop={1}>
+                    <Badge>
+                      Recommended: {getEffectiveDefault(currentOption.key)}
+                    </Badge>
+                  </Box>
+                )}
+              </>
+            ) : (
+              <>
+                <Box marginBottom={1}>
+                  <Text color="cyan">Enter new value:</Text>
+                </Box>
+                <Box marginBottom={1}>
+                  <TextInput
+                    value={inputValue}
+                    onChange={setInputValue}
+                    placeholder={getEffectiveDefault(currentOption.key)}
+                    onSubmit={handleNext}
+                  />
+                </Box>
+                <Text color="gray" dimColor>
+                  Press ENTER to confirm • Press TAB to use recommended • ESC to
+                  cancel edit
+                </Text>
+              </>
+            )}
           </Box>
         )}
       </Box>
@@ -2056,6 +2152,57 @@ const main = Effect.gen(function* () {
   // Check for --skip-config flag
   if (args.includes('--skip-config')) {
     skipConfig = true;
+  }
+
+  // Help output
+  const printHelp = () => {
+    const lines: string[] = [];
+    lines.push('Constellator – Generate Awesome lists from your GitHub stars');
+    lines.push('');
+    lines.push('Usage:');
+    lines.push('  constellator [command] [options]');
+    lines.push('');
+    lines.push('Commands:');
+    lines.push('  login            Authenticate with GitHub');
+    lines.push('  logout           Remove saved token');
+    lines.push('  config           Run interactive configuration');
+    lines.push('');
+    lines.push('Options:');
+    lines.push(
+      `  --name <file>    Output filename (default: ${outputFilename})`
+    );
+    lines.push('  --skip-config    Skip interactive configuration');
+    lines.push('  -h, --help       Show this help');
+    lines.push('');
+    lines.push('Environment variables (used as defaults):');
+    lines.push(
+      `  CONSTELLATE_MAX_REPOS           (default: ${MAX_REPOS_TO_PROCESS})`
+    );
+    lines.push(
+      `  CONSTELLATE_MODEL               (default: ${CONSTELLATE_MODEL})`
+    );
+    lines.push(
+      `  CONSTELLATE_MAX_CATEGORIES      (default: ${CONSTELLATE_MAX_CATEGORIES})`
+    );
+    lines.push(
+      `  CONSTELLATE_MIN_CAT_SIZE        (default: ${CONSTELLATE_MIN_CAT_SIZE})`
+    );
+    lines.push(
+      `  CONSTELLATE_MAX_NEW_CATEGORIES  (default: ${CONSTELLATE_MAX_NEW_CATEGORIES})`
+    );
+    lines.push('');
+    lines.push('Examples:');
+    lines.push('  constellator');
+    lines.push('  constellator --name AWESOME.md');
+    lines.push('  constellator login');
+    lines.push('  constellator config');
+    lines.push('  constellator logout');
+    console.log(lines.join('\n'));
+  };
+
+  if (args.includes('--help') || args.includes('-h') || cmd === 'help') {
+    printHelp();
+    return;
   }
 
   if (cmd === 'logout') {
