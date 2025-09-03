@@ -172,11 +172,43 @@ All other configuration goes here
 
 ### CLI Options
 
-| Option              | Description                      | Example                   |
-| ------------------- | -------------------------------- | ------------------------- |
-| `--name <filename>` | Custom output filename           | `--name MY_AWESOME.md`    |
-| `login`             | Interactive authentication setup | `npx constellator login`  |
-| `logout`            | Clear stored credentials         | `npx constellator logout` |
+| Option                   | Description                                        | Example                               |
+| ------------------------ | -------------------------------------------------- | ------------------------------------- |
+| `--name <filename>`      | Custom output filename                             | `--name MY_AWESOME.md`                |
+| `--version`              | Print version and exit                             | `--version`                           |
+| `--max-repos <n>`        | Override max repositories for this run             | `--max-repos 500`                     |
+| `--set KEY=VALUE`        | Override any config key (repeatable)               | `--set CONSTELLATE_MAX_CATEGORIES=60` |
+| `--artifacts-dir <path>` | Directory for artifacts (default: `.constellator`) | `--artifacts-dir .cache/constellator` |
+| `--min-size <n>`         | Minimum category size in README                    | `--min-size 2`                        |
+| `--open`                 | Open generated README on completion (macOS)        | `--open`                              |
+| `--batch-size <n>`       | Pass‑1 batch size (default: 4)                     | `--batch-size 6`                      |
+| `--timeout <ms>`         | Network timeout per request (default: 30000)       | `--timeout 45000`                     |
+| `--rate-limit`           | Print GitHub rate limit before/after the run       | `--rate-limit`                        |
+| `-h`, `--help`           | Show help                                          | `--help`                              |
+| `login`                  | Interactive authentication setup                   | `npx constellator login`              |
+| `logout`                 | Clear stored credentials                           | `npx constellator logout`             |
+
+#### Examples
+
+```bash
+# Change output file
+npx constellator --name MY_STARS.md
+
+# Run with more repos and stricter README filter
+npx constellator --max-repos 500 --min-size 2
+
+# Override a config key without editing files
+npx constellator --set CONSTELLATE_MAX_CATEGORIES=60
+
+# Use a custom artifacts directory
+npx constellator --artifacts-dir .cache/constellator
+
+# Increase batch size and timeout, and open the file when done
+npx constellator --batch-size 6 --timeout 45000 --open
+
+# Print GitHub rate limit before/after
+npx constellator --rate-limit
+```
 
 ## 🎨 Example Output
 

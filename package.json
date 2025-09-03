@@ -1,6 +1,6 @@
 {
   "name": "constellator",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Turn a repo list into a clean constellation of categories.",
   "type": "module",
   "bin": {

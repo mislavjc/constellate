@@ -891,7 +891,8 @@ const StarFetchingApp: React.FC<{
   outputFilename: string;
   username?: string;
   onStarsFetched: (stars: StarredRepo[]) => void;
-}> = ({ token, maxRepos, username, onStarsFetched }) => {
+  timeoutMs?: number;
+}> = ({ token, maxRepos, username, onStarsFetched, timeoutMs = 30000 }) => {
   const [fetchingPhase, setFetchingPhase] = useState<
     'connecting' | 'fetching' | 'complete'
   >('connecting');
@@ -922,14 +923,22 @@ const StarFetchingApp: React.FC<{
           batchCount++;
           setCurrentBatch(batchCount);
 
-          const response = await fetch(url, {
-            headers: {
-              Authorization: `Bearer ${token}`,
-              Accept: 'application/vnd.github+json',
-              'X-GitHub-Api-Version': '2022-11-28',
-              'User-Agent': 'constellator',
-            },
-          });
+          const controller = new AbortController();
+          const t = setTimeout(() => controller.abort(), timeoutMs);
+          let response: Response;
+          try {
+            response = await fetch(url, {
+              headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: 'application/vnd.github+json',
+                'X-GitHub-Api-Version': '2022-11-28',
+                'User-Agent': 'constellator',
+              },
+              signal: controller.signal,
+            });
+          } finally {
+            clearTimeout(t);
+          }
 
           if (!response.ok) {
             throw new Error(`GitHub API error: ${response.status}`);
@@ -1128,7 +1137,21 @@ const ConstellateStreamingApp: React.FC<{
   token: string;
   onFinish: (store: ConstellateStore) => void;
   outputFilename: string;
-}> = ({ stars, maxRepos, token, onFinish, outputFilename }) => {
+  artifactsDir?: string;
+  readmeMinSize?: number;
+  batchSize?: number;
+  openOnComplete?: boolean;
+}> = ({
+  stars,
+  maxRepos,
+  token,
+  onFinish,
+  outputFilename,
+  artifactsDir = '.constellator',
+  readmeMinSize = 1,
+  batchSize = 4,
+  openOnComplete = false,
+}) => {
   const [currentPhase, setCurrentPhase] = useState<
     'fetching' | 'ai-processing' | 'complete'
   >('fetching');
@@ -1245,7 +1268,7 @@ const ConstellateStreamingApp: React.FC<{
         setAiPhase('pass1');
         let merged: any = null;
         try {
-          const batches = batch(repoFeatures, 4);
+          const batches = batch(repoFeatures, Math.max(1, batchSize || 4));
           setTotalBatches(batches.length);
 
           const expandPlans: z.infer<typeof ExpandPlanPlus>[] = [];
@@ -1603,19 +1626,25 @@ const ConstellateStreamingApp: React.FC<{
         ensureMinimumFeatureSignals(repoFeatures);
 
         // Write artifacts
-        await fs.mkdir('.constellator', { recursive: true });
+        await fs.mkdir(artifactsDir, { recursive: true });
         await fs.writeFile(
-          '.constellator/repos.json',
+          `${artifactsDir}/repos.json`,
           JSON.stringify(repoFeatures, null, 2),
           'utf-8'
         );
         await fs.writeFile(
-          '.constellator/constellator.json',
+          `${artifactsDir}/constellator.json`,
           JSON.stringify(store, null, 2),
           'utf-8'
         );
-        const md = renderReadme(store, repoFeatures, 1);
+        const md = renderReadme(store, repoFeatures, readmeMinSize ?? 1);
         await fs.writeFile(outputFilename, md, 'utf-8');
+
+        if (openOnComplete) {
+          try {
+            await Bun.$`open ${outputFilename}`;
+          } catch {}
+        }
 
         setCurrentPhase('complete');
         onFinish(store);
@@ -2101,21 +2130,30 @@ const ConstellateStreamingApp: React.FC<{
 };
 
 // Configuration file utilities
-const CONFIG_FILE_PATH = '.constellator/config.json';
+const getConfigFilePath = (artifactsDir: string) =>
+  `${artifactsDir}/config.json`;
 
-const loadSavedConfig = async (): Promise<Record<string, string> | null> => {
+const loadSavedConfig = async (
+  artifactsDir: string
+): Promise<Record<string, string> | null> => {
   try {
-    const configData = await fs.readFile(CONFIG_FILE_PATH, 'utf-8');
+    const configData = await fs.readFile(
+      getConfigFilePath(artifactsDir),
+      'utf-8'
+    );
     return JSON.parse(configData);
   } catch {
     return null;
   }
 };
 
-const saveConfig = async (config: Record<string, string>): Promise<void> => {
-  await fs.mkdir('.constellator', { recursive: true });
+const saveConfig = async (
+  artifactsDir: string,
+  config: Record<string, string>
+): Promise<void> => {
+  await fs.mkdir(artifactsDir, { recursive: true });
   await fs.writeFile(
-    CONFIG_FILE_PATH,
+    getConfigFilePath(artifactsDir),
     JSON.stringify(config, null, 2),
     'utf-8'
   );
@@ -2137,6 +2175,14 @@ const main = Effect.gen(function* () {
   let outputFilename = 'AWESOME.md';
   let cmd = args[0];
   let skipConfig = false;
+  let artifactsDir = '.constellator';
+  let maxReposOverride: number | null = null;
+  let readmeMinSize: number | null = null;
+  let openOnComplete = false;
+  let pass1BatchSize = 4;
+  let timeoutMs = 30000;
+  let printRateLimit = false;
+  const setOverrides: Record<string, string> = {};
 
   // Check for --name parameter
   for (let i = 0; i < args.length; i++) {
@@ -2154,6 +2200,44 @@ const main = Effect.gen(function* () {
     skipConfig = true;
   }
 
+  // Additional argument parsing
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--artifacts-dir' && i + 1 < args.length) {
+      artifactsDir = args[i + 1]!;
+      i++;
+    } else if (a === '--max-repos' && i + 1 < args.length) {
+      const n = parseInt(args[i + 1] || '');
+      if (!Number.isNaN(n)) maxReposOverride = Math.max(1, n);
+      i++;
+    } else if (a === '--min-size' && i + 1 < args.length) {
+      const n = parseInt(args[i + 1] || '');
+      if (!Number.isNaN(n)) readmeMinSize = Math.max(0, n);
+      i++;
+    } else if (a === '--open') {
+      openOnComplete = true;
+    } else if (a === '--batch-size' && i + 1 < args.length) {
+      const n = parseInt(args[i + 1] || '');
+      if (!Number.isNaN(n)) pass1BatchSize = Math.max(1, n);
+      i++;
+    } else if (a === '--timeout' && i + 1 < args.length) {
+      const n = parseInt(args[i + 1] || '');
+      if (!Number.isNaN(n)) timeoutMs = Math.max(1000, n);
+      i++;
+    } else if (a === '--rate-limit') {
+      printRateLimit = true;
+    } else if (a === '--set' && i + 1 < args.length) {
+      const kv = args[i + 1] || '';
+      const eq = kv.indexOf('=');
+      if (eq > 0) {
+        const k = kv.slice(0, eq);
+        const v = kv.slice(eq + 1);
+        if (k) setOverrides[k] = v;
+      }
+      i++;
+    }
+  }
+
   // Help output
   const printHelp = () => {
     const lines: string[] = [];
@@ -2169,10 +2253,23 @@ const main = Effect.gen(function* () {
     lines.push('');
     lines.push('Options:');
     lines.push(
-      `  --name <file>    Output filename (default: ${outputFilename})`
+      `  --name <file>        Output filename (default: ${outputFilename})`
     );
-    lines.push('  --skip-config    Skip interactive configuration');
-    lines.push('  -h, --help       Show this help');
+    lines.push('  --skip-config        Skip interactive configuration');
+    lines.push('  --version            Print version and exit');
+    lines.push('  --max-repos <n>      Override max repositories for this run');
+    lines.push('  --set KEY=VALUE      Override any config key (repeatable)');
+    lines.push(
+      '  --artifacts-dir <p>  Directory for artifacts (default: .constellator)'
+    );
+    lines.push('  --min-size <n>       Minimum category size in README');
+    lines.push('  --open               Open generated README on completion');
+    lines.push('  --batch-size <n>     Pass-1 batch size (default: 4)');
+    lines.push(
+      '  --timeout <ms>       Network timeout per request (default: 30000)'
+    );
+    lines.push('  --rate-limit         Print GitHub rate limit before/after');
+    lines.push('  -h, --help           Show this help');
     lines.push('');
     lines.push('Environment variables (used as defaults):');
     lines.push(
@@ -2194,6 +2291,9 @@ const main = Effect.gen(function* () {
     lines.push('Examples:');
     lines.push('  constellator');
     lines.push('  constellator --name AWESOME.md');
+    lines.push('  constellator --max-repos 500 --min-size 2');
+    lines.push('  constellator --set CONSTELLATE_MAX_CATEGORIES=60');
+    lines.push('  constellator --artifacts-dir .cache/constellator');
     lines.push('  constellator login');
     lines.push('  constellator config');
     lines.push('  constellator logout');
@@ -2202,6 +2302,21 @@ const main = Effect.gen(function* () {
 
   if (args.includes('--help') || args.includes('-h') || cmd === 'help') {
     printHelp();
+    return;
+  }
+
+  // --version
+  if (args.includes('--version')) {
+    try {
+      const pkgRaw = yield* Effect.tryPromise({
+        try: () => fs.readFile('package.json', 'utf-8'),
+        catch: (e) => new Error(String(e)),
+      });
+      const pkg = JSON.parse(pkgRaw || '{}');
+      console.log(pkg.version || '0.0.0');
+    } catch {
+      console.log('0.0.0');
+    }
     return;
   }
 
@@ -2218,7 +2333,7 @@ const main = Effect.gen(function* () {
 
   // Load saved configuration and apply to environment
   const savedConfig = yield* Effect.tryPromise({
-    try: () => loadSavedConfig(),
+    try: () => loadSavedConfig(artifactsDir),
     catch: () => null,
   });
 
@@ -2247,7 +2362,7 @@ const main = Effect.gen(function* () {
 
     // Save configuration
     yield* Effect.tryPromise({
-      try: () => saveConfig(userConfig),
+      try: () => saveConfig(artifactsDir, userConfig),
       catch: (e) => console.warn('Failed to save configuration:', e),
     });
 
@@ -2270,13 +2385,48 @@ const main = Effect.gen(function* () {
     forceLogin: cmd === 'login',
   });
 
+  // Apply --set overrides to env now
+  for (const [k, v] of Object.entries(setOverrides)) {
+    if (v !== undefined) process.env[k] = v;
+  }
+
+  // Optionally print rate limit before
+  const printRate = function* (when: string) {
+    if (!printRateLimit) return;
+    try {
+      const res = yield* Effect.tryPromise({
+        try: () =>
+          fetch('https://api.github.com/rate_limit', {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/vnd.github+json',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'constellator',
+            },
+          }),
+        catch: (e) => new Error(String(e)),
+      });
+      const json = (yield* Effect.tryPromise({
+        try: () => res.json(),
+        catch: (e) => new Error(String(e)),
+      })) as any;
+      const core = json?.resources?.core || {};
+      console.log(
+        `[rate-limit:${when}] limit=${core.limit} remaining=${core.remaining} reset=${core.reset}`
+      );
+    } catch {}
+  };
+
+  yield* printRate('before');
+
   const me = yield* whoAmI(token);
 
   // Show progress during star fetching (username will be shown in UI)
+  const effectiveMaxRepos = maxReposOverride ?? MAX_REPOS_TO_PROCESS;
   const { waitUntilExit } = render(
     <StarFetchingApp
       token={token}
-      maxRepos={MAX_REPOS_TO_PROCESS}
+      maxRepos={effectiveMaxRepos}
       outputFilename={outputFilename}
       username={me?.login}
       onStarsFetched={(stars) => {
@@ -2289,7 +2439,7 @@ const main = Effect.gen(function* () {
         render(
           <ConstellateStreamingApp
             stars={stars}
-            maxRepos={MAX_REPOS_TO_PROCESS}
+            maxRepos={effectiveMaxRepos}
             token={token}
             outputFilename={outputFilename}
             onFinish={(_store) => {
@@ -2311,6 +2461,8 @@ const main = Effect.gen(function* () {
     try: () => waitUntilExit(),
     catch: (e) => new Error(String(e)),
   });
+
+  yield* printRate('after');
 }).pipe(
   Effect.provide(Layer.setConfigProvider(ConfigProvider.fromEnv())),
   Effect.map(() => undefined)
