@@ -7,9 +7,11 @@ import { ConstellateStore } from './schemas';
 import { QaFix } from './schemas';
 import { Category } from './schemas';
 import type { ModelMessage } from 'ai';
+import { tool } from 'ai';
 import { z } from 'zod';
 import slugify from 'slugify';
 import { safeStreamObject } from './safe-stream';
+import { computeReadmeTokenBudget, getConfiguredPolicies } from './budget';
 
 // Cached slugify function to avoid repeated computations
 const slugifyCache = new Map<string, string>();
@@ -283,7 +285,6 @@ export async function* aiPass0FactsExtractorStreaming(
 ) {
   // MICRO-BATCH: start with configurable batch size; can shrink if overflow happens
   const BATCH_SIZE = 4;
-  const MAX_README_TOKENS = 20000;
 
   const groups = Array.from(
     { length: Math.ceil(batchRepos.length / BATCH_SIZE) },
@@ -293,6 +294,10 @@ export async function* aiPass0FactsExtractorStreaming(
   for (const group of groups) {
     // Use auto-shrink wrapper for overflow fallback
     yield* streamWithAutoShrink(async (batchGroup: RepoFeature[]) => {
+      const perRepoReadmeTokens = await computeReadmeTokenBudget({
+        repoCountInBatch: batchGroup.length,
+      });
+
       const compact = batchGroup.map((r) => ({
         repo: {
           id: r.id,
@@ -302,7 +307,7 @@ export async function* aiPass0FactsExtractorStreaming(
           readme:
             r.purpose || r.capabilities?.length
               ? ''
-              : headTailSlice(r.readme_full ?? '', MAX_README_TOKENS),
+              : headTailSlice(r.readme_full ?? '', perRepoReadmeTokens),
         },
         return_schema:
           '{ facts, purpose, capabilities, tech_stack, keywords, disclaimers }',
@@ -356,7 +361,9 @@ export async function* aiPass0FactsExtractorStreaming(
 
 // Pass-1 (Expand + Summaries) - Revised with structured prompts and safe context handling
 export async function* aiPass1ExpandStreaming(batchRepos: RepoFeature[]) {
-  const MAX_README_TOKENS = 20000;
+  const perRepoReadmeTokens = await computeReadmeTokenBudget({
+    repoCountInBatch: batchRepos.length,
+  });
 
   const compact = batchRepos.map((r) => ({
     id: r.id,
@@ -370,7 +377,7 @@ export async function* aiPass1ExpandStreaming(batchRepos: RepoFeature[]) {
     tech_stack: r.tech_stack ?? [],
     keywords: r.keywords ?? [],
     // Use token-aware truncation instead of fixed char limit
-    readme: headTailSlice(r.readme_full ?? '', MAX_README_TOKENS),
+    readme: headTailSlice(r.readme_full ?? '', perRepoReadmeTokens),
   }));
 
   const messages: ModelMessage[] = [
@@ -415,7 +422,8 @@ Segmentation guidance:
         return_schema: '{ categories[], assignments[], summaries[] }', // assignments: [{ repo, category, reason, tags }]
         repos: compact,
         policy: {
-          max_new_categories: 180,
+          max_new_categories: getConfiguredPolicies(batchRepos.length)
+            .max_new_categories,
           category_name_len: { title_max: 32, desc_max: 140 },
           summary_len_max_chars: 220,
           segmentation: { by_language: true, by_layer: true, min_group: 2 },
@@ -429,6 +437,32 @@ Segmentation guidance:
     modelId: modelName,
     schema: ExpandPlanPlus,
     messages,
+    tools: {
+      // Lookup repo meta by id
+      repo_meta: tool({
+        description: 'Get metadata for a repository by ID',
+        inputSchema: z.object({ id: z.string() }),
+        execute: async ({ id }) => {
+          const byId = new Map(compact.map((r) => [r.id, r] as const));
+          return byId.get(id) || null;
+        },
+      }),
+      // Search READMEs for a keyword within this batch (token-safe excerpt)
+      readme_search: tool({
+        description:
+          'Search a repo README for a keyword and return a short excerpt',
+        inputSchema: z.object({ id: z.string(), q: z.string() }),
+        execute: async ({ id, q }) => {
+          const repo = compact.find((r) => r.id === id);
+          if (!repo || !repo.readme) return null;
+          const idx = repo.readme.toLowerCase().indexOf(q.toLowerCase());
+          if (idx < 0) return null;
+          const start = Math.max(0, idx - 240);
+          const end = Math.min(repo.readme.length, idx + 240);
+          return repo.readme.slice(start, end);
+        },
+      }),
+    },
     reserveOutput: Number(2048) || 2048,
   });
 
@@ -488,7 +522,12 @@ Rules:
     {
       role: 'user',
       content: JSON.stringify({
-        policies: { ...policies, splitThreshold: policies.splitThreshold || 6 },
+        policies: {
+          ...policies,
+          splitThreshold:
+            policies.splitThreshold ||
+            getConfiguredPolicies(allRepos.length).splitThreshold,
+        },
         repos: repoSignals,
         proposed: merged,
         returnSchema: '{ categories[], assignments[] }',
@@ -501,6 +540,20 @@ Rules:
     modelId: modelName,
     schema: ExpandPlanPlus, // reuse: categories+assignments are compatible
     messages,
+    tools: {
+      category_guess: tool({
+        description:
+          'Given a repo id and key topics, suggest 1-3 finer-grained category titles',
+        inputSchema: z.object({
+          id: z.string(),
+          key_topics: z.array(z.string()).default([]),
+        }),
+        execute: async ({ id, key_topics }) => {
+          const r = repoSignals.find((x) => x.id === id);
+          return { id, hints: (r?.keywords || []).slice(0, 3), key_topics };
+        },
+      }),
+    },
     reserveOutput: Number(2048) || 2048,
   });
 
@@ -546,7 +599,7 @@ Goals:
 2) Keep important, widely-recognized domains distinct.
 3) Prefer layer/language splits only when helpful within the target budget.
 
-Target range: min = ${22}, max = ${36}.
+Target range: min = ${budget.min}, max = ${budget.max}.
 Return updated canonical categories and a reassignment map (id -> category).`,
     },
     {
@@ -697,8 +750,10 @@ If two categories fit equally, choose the one with more repos after consolidatio
       content: JSON.stringify({
         policies: {
           ...policies,
-          max_new_categories: policies.max_new_categories || 80,
-          splitThreshold: 6,
+          max_new_categories:
+            policies.max_new_categories ||
+            getConfiguredPolicies(allRepos.length).max_new_categories,
+          splitThreshold: getConfiguredPolicies(allRepos.length).splitThreshold,
         },
         repos: repoSummaries,
         proposed: merged,
@@ -715,6 +770,31 @@ If two categories fit equally, choose the one with more repos after consolidatio
     modelId: modelName,
     schema: StreamlinedPlan,
     messages,
+    tools: {
+      glossary_lookup: tool({
+        description: 'Lookup canonical category by alias',
+        inputSchema: z.object({ alias: z.string() }),
+        execute: async ({ alias }) => {
+          const a = cachedSlugify(alias);
+          const entry = glossary.preferred.find(
+            (c) => c.slug === a || cachedSlugify(c.title) === a
+          );
+          return entry || null;
+        },
+      }),
+      category_stats: tool({
+        description: 'Get current category sizes',
+        inputSchema: z.object({}),
+        execute: async () => {
+          const counts: Record<string, number> = {};
+          for (const a of merged.assignments) {
+            const k = cachedSlugify(a.category);
+            counts[k] = (counts[k] || 0) + 1;
+          }
+          return counts;
+        },
+      }),
+    },
     reserveOutput: Number(2048) || 2048,
   });
 
@@ -793,6 +873,24 @@ If count < minCategorySize, either (a) alias to closest match, or (b) keep if it
     modelId: modelName,
     schema: QaFix,
     messages,
+    tools: {
+      sample_repo: tool({
+        description:
+          'Return a small sample of repo summaries from a category slug',
+        inputSchema: z.object({ slug: z.string() }),
+        execute: async ({ slug }) => {
+          const s = cachedSlugify(slug);
+          const ids = (
+            storeDraft.categories.find((c) => c.slug === s)?.repos || []
+          )
+            .slice(0, 6)
+            .map((r) => r.id);
+          const out: Record<string, any> = {};
+          for (const id of ids) out[id] = repoMeta[id] || null;
+          return out;
+        },
+      }),
+    },
     reserveOutput: Number(1024) || 1024,
   });
 

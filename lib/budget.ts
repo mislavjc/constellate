@@ -7,6 +7,11 @@
 import type { ModelMessage } from 'ai';
 import { estimateTokens, headTailSlice } from './tokens';
 import { loadModelLimits } from './models';
+import {
+  CONSTELLATE_MAX_CATEGORIES,
+  CONSTELLATE_MIN_CAT_SIZE,
+  CONSTELLATE_MODEL,
+} from './config';
 
 const SYS_OVERHEAD = 300; // safety margin for tool/wrapper overhead
 const JSON_OVERHEAD = 300;
@@ -104,4 +109,83 @@ export function fitMessagesWithinBudget(
   }
 
   return { messages: cloned as ModelMessage[], trimmed };
+}
+
+// ------------------------- Category Budgeting -------------------------
+
+export type CategoryBudget = {
+  min: number;
+  max: number;
+  maxNew: number;
+  splitThreshold: number;
+};
+
+// Heuristic: aim for O(sqrt(N)) to O(N^0.6) categories depending on spread
+export function computeCategoryBudget(repoCount: number): CategoryBudget {
+  const n = Math.max(1, repoCount);
+  const sqrt = Math.ceil(Math.sqrt(n));
+  const softMax = Math.ceil(Math.pow(n, 0.6));
+
+  // Respect configured caps but keep sensible lower/upper bounds
+  const configuredMax = Math.max(8, Math.min(160, CONSTELLATE_MAX_CATEGORIES));
+  const min = Math.max(2, Math.min(CONSTELLATE_MIN_CAT_SIZE, Math.floor(sqrt)));
+  const max = Math.min(configuredMax, Math.max(sqrt * 2, softMax));
+  const maxNew = Math.max(16, Math.min(120, Math.floor(max * 2)));
+  const splitThreshold = Math.max(6, Math.min(12, Math.floor(sqrt + 4)));
+
+  return { min, max, maxNew, splitThreshold };
+}
+
+// ----------------------- Per-Repo Context Budget ----------------------
+
+export async function computeReadmeTokenBudget(args: {
+  repoCountInBatch: number;
+  modelId?: string;
+  reserveOutput?: number;
+  payloadOverheadTokens?: number; // approximate tokens for non-README fields per repo
+}): Promise<number> {
+  const modelId = args.modelId || CONSTELLATE_MODEL;
+  const reserveOutput = Math.max(256, args.reserveOutput ?? 2048);
+  const payloadOverhead = Math.max(64, args.payloadOverheadTokens ?? 256);
+
+  const lim = await loadModelLimits(modelId);
+  // Leave headroom for system prompt and JSON overhead
+  const usableInput = Math.max(
+    4096,
+    lim.context - reserveOutput - SYS_OVERHEAD
+  );
+
+  // Allocate ~70% of usable input to README text across the batch, 30% to metadata
+  const readmePool = Math.floor(usableInput * 0.7);
+  const metaPool = usableInput - readmePool;
+
+  // Reserve meta per repo first
+  const perRepoMeta = Math.max(
+    64,
+    Math.floor(metaPool / Math.max(1, args.repoCountInBatch))
+  );
+  const perRepoReadme = Math.max(
+    256,
+    Math.floor(
+      (readmePool - args.repoCountInBatch * payloadOverhead) /
+        Math.max(1, args.repoCountInBatch)
+    )
+  );
+
+  // Final per-repo budget is the readme allowance; headTailSlice uses token approximation
+  return Math.max(
+    256,
+    Math.min(perRepoReadme, Math.floor(usableInput / args.repoCountInBatch))
+  );
+}
+
+// Convenience to compute consistent policies for downstream passes
+export function getConfiguredPolicies(repoCount: number) {
+  const budget = computeCategoryBudget(repoCount);
+  return {
+    minCategorySize: budget.min,
+    maxCategories: budget.max,
+    max_new_categories: budget.maxNew,
+    splitThreshold: budget.splitThreshold,
+  };
 }

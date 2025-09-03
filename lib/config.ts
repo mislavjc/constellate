@@ -59,3 +59,25 @@ export const CONSTELLATE_FALLBACK_MODELS = (() => {
 // Internal defaults (not user-configurable)
 export const CONSTELLATE_DEFAULT_CONTEXT = 128000;
 export const CONSTELLATE_DEFAULT_OUTPUT = 8192;
+
+// Category budgeting (user-configurable via .constellator/config.json)
+export const CONSTELLATE_MAX_CATEGORIES = (() => {
+  const raw = savedConfig.CONSTELLATE_MAX_CATEGORIES;
+  const value = parseInt(String(raw ?? '80'));
+  if (Number.isNaN(value)) return 80;
+  return Math.max(8, Math.min(200, value));
+})();
+
+export const CONSTELLATE_MIN_CAT_SIZE = (() => {
+  const raw = savedConfig.CONSTELLATE_MIN_CAT_SIZE;
+  const value = parseInt(String(raw ?? '2'));
+  if (Number.isNaN(value)) return 2;
+  return Math.max(1, Math.min(10, value));
+})();
+
+export const CONSTELLATE_MAX_NEW_CATEGORIES = (() => {
+  const raw = savedConfig.CONSTELLATE_MAX_NEW_CATEGORIES;
+  const value = parseInt(String(raw ?? '80'));
+  if (Number.isNaN(value)) return 80;
+  return Math.max(16, Math.min(200, value));
+})();

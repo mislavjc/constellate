@@ -16,6 +16,7 @@ type StreamArgs<T extends z.ZodType<any, any, any>> = {
   messages: ModelMessage[];
   maxRetries?: number;
   reserveOutput?: number;
+  tools?: Record<string, any>;
 };
 
 export async function safeStreamObject<T extends z.ZodType<any, any, any>>({
@@ -25,6 +26,7 @@ export async function safeStreamObject<T extends z.ZodType<any, any, any>>({
   messages,
   maxRetries = 2,
   reserveOutput = 2048,
+  tools,
 }: StreamArgs<T>) {
   let attempt = 0;
   let currentMessages = messages;
@@ -40,6 +42,7 @@ export async function safeStreamObject<T extends z.ZodType<any, any, any>>({
         schema,
         messages: fitted.messages,
         maxTokens: plan.reserveOutput,
+        tools,
       });
       return res; // caller consumes the stream
     } catch (err: any) {
