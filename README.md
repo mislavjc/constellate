@@ -46,8 +46,8 @@ npx constellator config
 
 Required:
 
-- GitHub Personal Access Token with `repo` scope (stored in `.constellator/config.json`)
 - Vercel AI Gateway key (stored in `.env` as `AI_GATEWAY_API_KEY`)
+- GitHub token (stored in `.env` as `GITHUB_TOKEN`, written automatically after `constellator login`)
 
 ### Usage
 
@@ -74,6 +74,12 @@ npx constellator --name MY_STARS.md
 
 ```bash
 npx constellator login
+```
+
+Check authentication status:
+
+```bash
+npx constellator whoami
 ```
 
 #### Logout and clear stored token
@@ -125,7 +131,7 @@ your-project/
 └── .env                          # Environment variables (AI Gateway key only)
 ```
 
-### Key Files Created:
+### Key Files Created
 
 - **AWESOME.md**: The main output file with your organized repository list
 - **.constellator/constellator.json**: Complete processed data with all repository metadata, categories, and AI analysis
@@ -140,20 +146,23 @@ Constellator uses two configuration files:
 
 #### 1. Environment Variables (.env)
 
-Only the Vercel AI Gateway API key goes here
+Place your runtime secrets here. Bun auto-loads `.env`.
 
 ```bash
-# .env file - only for Vercel AI Gateway
+# .env file
+# Vercel AI Gateway (required)
 AI_GATEWAY_API_KEY=vck_your_vercel_ai_gateway_key_here
+
+# GitHub token (recommended; set via `constellator login`)
+GITHUB_TOKEN=ghp_your_token_here
 ```
 
 #### 2. Application Settings (.constellator/config.json)
 
-All other configuration goes here
+Non-secret app settings go here
 
 ```json
 {
-  "GITHUB_TOKEN": "your_github_personal_access_token_here",
   "CONSTELLATE_MAX_REPOS": "100",
   "CONSTELLATE_MODEL": "openai/gpt-4o-mini",
   "CONSTELLATE_FALLBACK_MODELS": ["openai/gpt-3.5-turbo", "openai/gpt-4"]
@@ -162,13 +171,48 @@ All other configuration goes here
 
 ### Configuration Options
 
-| Variable                      | File                        | Default                | Description                     |
-| ----------------------------- | --------------------------- | ---------------------- | ------------------------------- |
-| `AI_GATEWAY_API_KEY`          | `.env`                      | Required               | Vercel AI Gateway API key       |
-| `GITHUB_TOKEN`                | `.constellator/config.json` | Required               | GitHub Personal Access Token    |
-| `CONSTELLATE_MAX_REPOS`       | `.constellator/config.json` | `100`                  | Maximum repositories to process |
-| `CONSTELLATE_MODEL`           | `.constellator/config.json` | `openai/gpt-4o-mini`   | Primary AI model to use         |
-| `CONSTELLATE_FALLBACK_MODELS` | `.constellator/config.json` | `openai/gpt-3.5-turbo` | Fallback AI models              |
+| Variable                      | File                        | Default                | Description                      |
+| ----------------------------- | --------------------------- | ---------------------- | -------------------------------- |
+| `AI_GATEWAY_API_KEY`          | `.env`                      | Required               | Vercel AI Gateway API key        |
+| `GITHUB_TOKEN`                | `.env`                      | Recommended            | GitHub token (saved after login) |
+| `CONSTELLATE_MAX_REPOS`       | `.constellator/config.json` | `100`                  | Maximum repositories to process  |
+| `CONSTELLATE_MODEL`           | `.constellator/config.json` | `openai/gpt-4o-mini`   | Primary AI model to use          |
+| `CONSTELLATE_FALLBACK_MODELS` | `.constellator/config.json` | `openai/gpt-3.5-turbo` | Fallback AI models               |
+
+## 🔐 Getting a GitHub token
+
+You have three easy options. Pick one:
+
+- **Option A: Device flow (interactive, recommended)**
+
+  - Run: `npx constellator login`
+  - Follow the on-screen instructions (opens GitHub in your browser)
+  - Constellator saves a short‑lived token in `~/.constellator.json`
+
+- **Option B: GitHub CLI (if you already use `gh`)**
+
+  - Run: `gh auth login` and complete the prompts
+  - Constellator detects and uses your CLI token automatically
+
+- **Option C: Personal Access Token (manual)**
+  1. Go to GitHub → Settings → Developer settings → Personal access tokens
+  2. Choose either:
+     - Fine‑grained token: limit to your account, set Repository access to the repos you want Constellator to read
+     - Classic token: simplest; scopes below
+  3. Scopes to select:
+     - Required: `read:user`, `public_repo`
+     - Optional (for private repos): `repo`
+  4. Copy the token and store it in `.env` like:
+
+```bash
+GITHUB_TOKEN=ghp_your_token_here
+```
+
+Tips:
+
+- You can create/edit the config interactively with: `npx constellator config`
+- To verify auth quickly: `npx constellator login` or run with `--rate-limit` to see API credits
+- After successful login, Constellator writes `GITHUB_TOKEN=...` to `.env` in your current directory
 
 ### CLI Options
 
@@ -288,26 +332,26 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ### Common Issues
 
-**"No starred repositories found"**
+#### No starred repositories found
 
-- Verify your GitHub token in `.constellator/config.json` has the correct permissions
+- Verify your GitHub token in `.env` has the correct permissions
 - Check that you have starred repositories
 
-**"AI Gateway authentication failed"**
+#### AI Gateway authentication failed
 
 - Verify your `AI_GATEWAY_API_KEY` in `.env` is correct
 - Make sure you're using a valid Vercel AI Gateway key
 
-**"AI Gateway API rate limit exceeded"**
+#### AI Gateway API rate limit exceeded
 
 - Reduce `CONSTELLATE_MAX_REPOS` in `.constellator/config.json` or wait for rate limit reset
 - Consider upgrading your Vercel AI Gateway plan
 
-**"Configuration not found"**
+#### Configuration not found
 
 - Run `npx constellator config` to set up your configuration
 - Ensure `.constellator/config.json` exists with proper settings
-- Make sure `.env` contains your `AI_GATEWAY_API_KEY`
+- Make sure `.env` contains `AI_GATEWAY_API_KEY` (and `GITHUB_TOKEN` if not using `gh`)
 
 ### Getting Help
 

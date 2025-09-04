@@ -2167,6 +2167,72 @@ const applyConfigToEnv = (config: Record<string, string>): void => {
   }
 };
 
+// -------------------------------- Preflight Checks ---------------------------------
+const runPreflightChecks = (
+  options: { cmd?: string; requireAi?: boolean; requireGithub?: boolean } = {}
+) =>
+  Effect.gen(function* () {
+    const { cmd, requireAi = true, requireGithub = true } = options;
+
+    // Commands that never require preflight
+    const isReadOnlyCmd = cmd === 'help' || cmd === '--help' || cmd === '-h';
+    const isVersion = cmd === '--version' || cmd === 'version';
+    const isLogout = cmd === 'logout';
+    if (isReadOnlyCmd || isVersion || isLogout) return;
+
+    const errors: string[] = [];
+
+    // 1) AI Gateway key present and valid (unless explicitly not required, e.g. login)
+    if (requireAi && cmd !== 'login') {
+      const apiKey = (process.env.AI_GATEWAY_API_KEY || '').trim();
+      if (!apiKey) {
+        errors.push(
+          '❌ Missing AI_GATEWAY_API_KEY. Create a .env file with:\n   AI_GATEWAY_API_KEY=your_vercel_ai_gateway_key'
+        );
+      }
+
+      // Light validation by fetching available models
+      if (apiKey) {
+        const aiCheck = yield* Effect.tryPromise({
+          try: async () => {
+            await gateway.getAvailableModels();
+          },
+          catch: (e) => new Error(String(e)),
+        }).pipe(Effect.either);
+
+        if (aiCheck._tag === 'Left') {
+          const msg = aiCheck.left?.message || 'Unknown error';
+          errors.push(
+            `❌ AI Gateway validation failed: ${msg}\n   → Verify AI_GATEWAY_API_KEY in .env`
+          );
+        }
+      }
+    }
+
+    // 2) GitHub authentication available (non-interactive check)
+    if (requireGithub && cmd !== 'login' && cmd !== 'config') {
+      const precheck = yield* ensureAuthenticatedToken({
+        interactive: false,
+        forceLogin: false,
+      }).pipe(Effect.either);
+
+      if (precheck._tag === 'Left') {
+        const m = precheck.left?.message || 'No valid GitHub token found';
+        errors.push(
+          `❌ GitHub authentication failed: ${m}\n   → Run \`constellator login\` or set GITHUB_TOKEN and retry`
+        );
+      }
+    }
+
+    if (errors.length > 0) {
+      console.error('Preflight checks failed:\n');
+      for (const e of errors) {
+        console.error(e + '\n');
+      }
+      process.exit(1);
+    }
+  });
+
 // ----------------------------------- CLI -----------------------------------
 const main = Effect.gen(function* () {
   const [, , ...args] = process.argv;
@@ -2326,6 +2392,26 @@ const main = Effect.gen(function* () {
     return;
   }
 
+  if (cmd === 'whoami') {
+    // Resolve a token non-interactively if possible
+    const tokenEither = yield* ensureAuthenticatedToken({
+      interactive: false,
+      forceLogin: false,
+    }).pipe(Effect.either);
+    if (tokenEither._tag === 'Left') {
+      console.log('Not authenticated. Run `constellator login`.');
+      return;
+    }
+    const tokenWho = tokenEither.right;
+    const meNow = yield* whoAmI(tokenWho);
+    if (meNow?.login) {
+      console.log(`You are logged in as @${meNow.login}`);
+    } else {
+      console.log('Not authenticated. Run `constellator login`.');
+    }
+    return;
+  }
+
   if (cmd === 'config') {
     // Force interactive configuration
     skipConfig = false;
@@ -2340,6 +2426,9 @@ const main = Effect.gen(function* () {
   if (savedConfig && cmd !== 'config') {
     applyConfigToEnv(savedConfig);
   }
+
+  // Preflight: fail fast on missing/invalid env/auth before any UI
+  yield* runPreflightChecks({ cmd, requireAi: true, requireGithub: true });
 
   // Interactive configuration setup (unless skipped)
   if (!skipConfig && (!savedConfig || cmd === 'config')) {
@@ -2384,6 +2473,12 @@ const main = Effect.gen(function* () {
     interactive: cmd === 'login' || !cmd,
     forceLogin: cmd === 'login',
   });
+
+  // If this was an explicit login command, stop here
+  if (cmd === 'login') {
+    console.log('✅ Login complete. You can now run constellator.');
+    return;
+  }
 
   // Apply --set overrides to env now
   for (const [k, v] of Object.entries(setOverrides)) {

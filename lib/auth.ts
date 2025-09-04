@@ -2,11 +2,30 @@ import { Effect, Console } from 'effect';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import readline from 'node:readline';
 import { runCommand } from './utils';
 
 const TOKEN_PATH = path.join(os.homedir(), '.constellator.json');
 const CLIENT_ID = process.env.GITHUB_CLIENT_ID ?? 'Iv1.0000000000000000';
+const isClientIdPlaceholder = (id: string | undefined): boolean => {
+  if (!id) return true;
+  return id === 'Iv1.0000000000000000' || /Iv1\.0{16,}/.test(id);
+};
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+
+async function saveTokenToDotEnv(token: string): Promise<void> {
+  const envPath = path.join(process.cwd(), '.env');
+  let existing = '';
+  try {
+    existing = await fs.readFile(envPath, 'utf-8');
+  } catch {}
+  const lines = existing.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  const withoutToken = lines.filter((l) => !/^\s*GITHUB_TOKEN\s*=/.test(l));
+  withoutToken.push(`GITHUB_TOKEN=${token}`);
+  const content = withoutToken.join('\n') + '\n';
+  await fs.writeFile(envPath, content, 'utf-8');
+  process.env.GITHUB_TOKEN = token;
+}
 
 export const hasGitHubCLI = (): Effect.Effect<boolean> =>
   runCommand('which gh').pipe(
@@ -79,8 +98,14 @@ export const startDeviceFlow = (
   scope = 'public_repo read:user'
 ): Effect.Effect<string, Error> =>
   Effect.gen(function* () {
-    if (!CLIENT_ID)
-      yield* Effect.fail(new Error('GitHub authentication required'));
+    if (isClientIdPlaceholder(CLIENT_ID))
+      yield* Effect.fail(
+        new Error(
+          'Interactive login is not configured. Set GITHUB_CLIENT_ID to your GitHub OAuth app client id, or use one of:\n' +
+            '  • gh auth login (then re-run)\n' +
+            '  • set GITHUB_TOKEN in .constellator/config.json and re-run'
+        )
+      );
     const body = new URLSearchParams({ client_id: CLIENT_ID, scope });
     const r = yield* Effect.tryPromise({
       try: () =>
@@ -95,7 +120,11 @@ export const startDeviceFlow = (
       catch: (e) => new Error(String(e)),
     });
     if (!r.ok)
-      yield* Effect.fail(new Error(`Device code request failed: ${r.status}`));
+      yield* Effect.fail(
+        new Error(
+          `Device code request failed: ${r.status}. If this persists, verify GITHUB_CLIENT_ID is a valid OAuth app client id.`
+        )
+      );
     const json = (yield* Effect.tryPromise({
       try: () => r.json(),
       catch: (e) => new Error(String(e)),
@@ -242,8 +271,31 @@ export const ensureAuthenticatedToken = (
       }
     }
 
-    // 4. If interactive, start device flow
+    // 4. If interactive, start device flow or guide manual PAT flow
     if (interactive) {
+      // Prefer GitHub CLI if available (works without OAuth app)
+      const hasCLIInteractive = yield* hasGitHubCLI();
+      if (hasCLIInteractive) {
+        const cliAuthenticated = yield* isGitHubCLIAuthenticated();
+        if (cliAuthenticated) {
+          const cliToken = yield* getGitHubCLIToken();
+          if (cliToken) {
+            const cliUser = yield* whoAmI(cliToken);
+            if (cliUser) {
+              yield* writeToken(cliToken);
+              yield* Effect.tryPromise({
+                try: () => saveTokenToDotEnv(cliToken),
+                catch: (e) => new Error(String(e)),
+              });
+              return cliToken;
+            }
+          }
+        } else {
+          yield* Console.log(
+            '🔐 GitHub CLI found but not authenticated. Run `gh auth login` and then re-run this command.'
+          );
+        }
+      }
       if (GITHUB_TOKEN && forceLogin) {
         yield* Console.log(
           'ℹ️  You have GITHUB_TOKEN set. Use `constellator logout` first to use OAuth.'
@@ -253,12 +305,64 @@ export const ensureAuthenticatedToken = (
         );
       }
 
+      // If no OAuth client id is configured, offer a manual PAT flow
+      if (isClientIdPlaceholder(CLIENT_ID)) {
+        yield* Console.log(
+          '\nGitHub OAuth app is not configured for device flow.'
+        );
+        yield* Console.log(
+          'You can quickly create a Personal Access Token (PAT):\n' +
+            '  1) Open: https://github.com/settings/tokens/new?scopes=read:user,public_repo\n' +
+            '  2) Copy the token and paste it below.'
+        );
+
+        const tokenFromPrompt = yield* Effect.tryPromise({
+          try: () =>
+            new Promise<string>((resolve) => {
+              const rl = readline.createInterface({
+                input: process.stdin,
+                output: process.stdout,
+              });
+              rl.question('Paste token here: ', (answer) => {
+                rl.close();
+                resolve(answer.trim());
+              });
+            }),
+          catch: (e) => new Error(String(e)),
+        });
+
+        if (!tokenFromPrompt) {
+          return yield* Effect.fail(new Error('No token entered'));
+        }
+
+        const user = yield* whoAmI(tokenFromPrompt);
+        if (user) {
+          yield* writeToken(tokenFromPrompt);
+          yield* Effect.tryPromise({
+            try: () => saveTokenToDotEnv(tokenFromPrompt),
+            catch: (e) => new Error(String(e)),
+          });
+          yield* Console.log(
+            `✅ Logged in as ${user.login}. Saved token to ${TOKEN_PATH} and .env`
+          );
+          return tokenFromPrompt;
+        }
+
+        return yield* Effect.fail(
+          new Error('Failed to validate token. Please try again.')
+        );
+      }
+
       const token = yield* startDeviceFlow();
       const user = yield* whoAmI(token);
       if (user) {
         yield* writeToken(token);
+        yield* Effect.tryPromise({
+          try: () => saveTokenToDotEnv(token),
+          catch: (e) => new Error(String(e)),
+        });
         yield* Console.log(
-          `✅ Logged in as ${user.login}. Saved token to ${TOKEN_PATH}`
+          `✅ Logged in as ${user.login}. Saved token to ${TOKEN_PATH} and .env`
         );
         return token;
       } else {
