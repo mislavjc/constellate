@@ -21,7 +21,8 @@
     "lint:fix": "bunx eslint . --fix",
     "format": "bunx prettier --write .",
     "format:check": "bunx prettier --check .",
-    "type-check": "bunx tsc --noEmit"
+    "type-check": "bunx tsc --noEmit",
+    "prepare": "husky"
   },
   "license": "MIT",
   "repository": {
@@ -29,6 +30,8 @@
     "url": "git+https://github.com/mislavjc/constellator.git"
   },
   "devDependencies": {
+    "@commitlint/cli": "^19.8.1",
+    "@commitlint/config-conventional": "^19.8.1",
     "@types/bun": "latest",
     "@typescript-eslint/eslint-plugin": "^8.42.0",
     "@typescript-eslint/parser": "^8.42.0",
@@ -37,6 +40,7 @@
     "eslint-plugin-prettier": "^5.5.4",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^5.2.0",
+    "husky": "^9.1.7",
     "prettier": "^3.6.2"
   },
   "peerDependencies": {
