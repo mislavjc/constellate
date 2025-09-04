@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 // -------------------------- Categorization schema ---------------------------
-export const RepoFacts = z.object({
+export const RepoFactsSchema = z.object({
   is_framework: z.boolean().default(false),
   is_cli: z.boolean().default(false),
   is_library: z.boolean().default(false),
@@ -10,8 +10,9 @@ export const RepoFacts = z.object({
   has_benchmark: z.boolean().default(false),
   license: z.string().optional(),
 });
+export type RepoFacts = z.infer<typeof RepoFactsSchema>;
 
-export const RepoFeature = z.object({
+export const RepoFeatureSchema = z.object({
   id: z.string(),
   name: z.string(),
   owner: z.string(),
@@ -26,7 +27,7 @@ export const RepoFeature = z.object({
   pushed_at: z.string().optional(),
   readme_full: z.string().optional().default(''),
   // NEW: Pass-0 extracted facts
-  facts: RepoFacts.optional(),
+  facts: RepoFactsSchema.optional(),
   purpose: z.string().optional(),
   capabilities: z.array(z.string()).default([]),
   tech_stack: z.array(z.string()).default([]),
@@ -36,9 +37,9 @@ export const RepoFeature = z.object({
   summary: z.string().optional().default(''),
   key_topics: z.array(z.string()).optional().default([]),
 });
-export type RepoFeature = z.infer<typeof RepoFeature>;
+export type RepoFeature = z.infer<typeof RepoFeatureSchema>;
 
-export const RepoEntry = z.object({
+export const RepoEntrySchema = z.object({
   id: z.string(),
   reason: z.string().optional().default(''),
   tags: z.array(z.string()).optional().default([]),
@@ -51,16 +52,17 @@ export const RepoEntry = z.object({
     .optional(),
   confidence: z.number().min(0).max(1).optional(),
 });
-export const Category = z.object({
+export type RepoEntry = z.infer<typeof RepoEntrySchema>;
+export const CategorySchema = z.object({
   slug: z.string(),
   title: z.string(),
   description: z.string().optional().default(''),
   criteria: z.string().optional().default(''),
-  repos: z.array(RepoEntry).default([]),
+  repos: z.array(RepoEntrySchema).default([]),
 });
-export type Category = z.infer<typeof Category>;
+export type Category = z.infer<typeof CategorySchema>;
 
-export const ConstellateStore = z.object({
+export const ConstellateStoreSchema = z.object({
   version: z.number().default(1),
   generated_at: z.string(),
   policies: z
@@ -80,7 +82,7 @@ export const ConstellateStore = z.object({
       minCategorySize: parseInt(process.env.CONSTELLATE_MIN_CAT_SIZE || '2'),
       maxCategories: parseInt(process.env.CONSTELLATE_MAX_CATEGORIES || '80'),
     }),
-  categories: z.array(Category).default([]),
+  categories: z.array(CategorySchema).default([]),
   orphans: z.array(z.string()).default([]),
   aliases: z.record(z.string(), z.string()).default({}),
   index: z.record(z.string(), z.object({ category: z.string() })).default({}),
@@ -95,17 +97,17 @@ export const ConstellateStore = z.object({
     )
     .default([]),
 });
-export type ConstellateStore = z.infer<typeof ConstellateStore>;
+export type ConstellateStore = z.infer<typeof ConstellateStoreSchema>;
 
 // NEW: short, factual summary for each repo (from README)
-export const RepoSummary = z.object({
+export const RepoSummarySchema = z.object({
   id: z.string(),
   summary: z.string().min(20).max(500),
   key_topics: z.array(z.string()).max(10).default([]),
 });
 
 // ------------------------------ AI Schemas ----------------------------------
-export const CategoryDraft = z
+export const CategoryDraftSchema = z
   .object({
     slug: z.string().optional(),
     title: z.string(),
@@ -114,7 +116,7 @@ export const CategoryDraft = z
   })
   .passthrough(); // ignore extra keys from the model
 
-export const AssignmentDraft = z
+export const AssignmentDraftSchema = z
   .object({
     repo: z.string(),
     category: z.string(), // Single category assignment
@@ -124,9 +126,9 @@ export const AssignmentDraft = z
   .passthrough();
 
 // Pass-1 now returns categories/assignments + summaries
-export const ExpandPlanPlus = z.object({
-  categories: z.array(CategoryDraft).default([]),
-  assignments: z.array(AssignmentDraft).default([]),
+export const ExpandPlanPlusSchema = z.object({
+  categories: z.array(CategoryDraftSchema).default([]),
+  assignments: z.array(AssignmentDraftSchema).default([]),
   summaries: z
     .array(
       z.object({
@@ -140,9 +142,9 @@ export const ExpandPlanPlus = z.object({
 
 // Pass-3 (QA) asks the model to normalize categories, dedupe/alias,
 // drop tiny/empty ones, and suggest reassignment fixes.
-export const QaFix = z.object({
+export const QaFixSchema = z.object({
   // canonical list of categories (post-merge)
-  categories: z.array(CategoryDraft).default([]),
+  categories: z.array(CategoryDraftSchema).default([]),
   // key: alias -> value: canonical slug/title
   aliases: z.record(z.string(), z.string()).default({}),
   // optional reassignments for misfiled repos
@@ -156,7 +158,7 @@ export const QaFix = z.object({
 });
 
 // Streamlined stays the same but a bit looser:
-export const StreamlinedRepo = z
+export const StreamlinedRepoSchema = z
   .object({
     id: z.string(),
     primaryCategory: z.string(),
@@ -166,16 +168,16 @@ export const StreamlinedRepo = z
   })
   .passthrough();
 
-export const StreamlinedPlan = z
+export const StreamlinedPlanSchema = z
   .object({
-    categories: z.array(CategoryDraft).optional().default([]),
+    categories: z.array(CategoryDraftSchema).optional().default([]),
     aliases: z.record(z.string(), z.string()).optional().default({}),
-    repos: z.array(StreamlinedRepo).optional().default([]),
+    repos: z.array(StreamlinedRepoSchema).optional().default([]),
   })
   .passthrough();
 
 // Category Glossary for persistent memory
-export const CategoryGlossary = z.object({
+export const CategoryGlossarySchema = z.object({
   version: z.number().default(3),
   preferred: z
     .array(

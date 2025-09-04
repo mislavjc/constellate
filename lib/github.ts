@@ -1,7 +1,6 @@
 import { Effect } from 'effect';
 import { parseNextLink } from './utils';
 
-
 export type StarredRepo = {
   full_name: string;
   description: string | null;
@@ -39,17 +38,17 @@ export const getRepoDetails = (token: string, repoFullName: string) =>
           'User-Agent': 'constellator',
         },
       }),
-    catch: (e) => new Error(String(e)),
+    catch: e => new Error(String(e)),
   }).pipe(
-    Effect.flatMap((r) =>
+    Effect.flatMap(r =>
       r.ok
         ? Effect.succeed(r)
         : Effect.fail(new Error(`GitHub error ${r.status}`))
     ),
-    Effect.flatMap((r) =>
+    Effect.flatMap(r =>
       Effect.tryPromise({
-        try: () => r.json() as Promise<any>,
-        catch: (e) => new Error(String(e)),
+        try: () => r.json() as Promise<Record<string, unknown>>,
+        catch: e => new Error(String(e)),
       })
     ),
     Effect.map(
@@ -89,14 +88,14 @@ export const getRepoReadme = (token: string, repoFullName: string) =>
           'User-Agent': 'constellator',
         },
       }),
-    catch: (e) => new Error(String(e)),
+    catch: e => new Error(String(e)),
   }).pipe(
-    Effect.flatMap((r) => {
+    Effect.flatMap(r => {
       if (r.status === 404) return Effect.succeed(null);
       if (!r.ok) return Effect.fail(new Error(`GitHub error ${r.status}`));
       return Effect.tryPromise({
-        try: () => r.json() as Promise<any>,
-        catch: (e) => new Error(String(e)),
+        try: () => r.json() as Promise<Record<string, unknown>>,
+        catch: e => new Error(String(e)),
       });
     }),
     Effect.map((json: Record<string, unknown> | null) => {
@@ -124,12 +123,12 @@ export const listStarred = (token: string) =>
               'User-Agent': 'constellator',
             },
           }),
-        catch: (e) => new Error(String(e)),
+        catch: e => new Error(String(e)),
       });
       if (!r.ok) yield* Effect.fail(new Error(`GitHub error ${r.status}`));
       const batch = (yield* Effect.tryPromise({
         try: () => r.json() as Promise<StarredRepo[]>,
-        catch: (e) => new Error(String(e)),
+        catch: e => new Error(String(e)),
       })) as StarredRepo[];
       for (const it of batch)
         all.push({

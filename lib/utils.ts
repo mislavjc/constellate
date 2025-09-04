@@ -4,6 +4,7 @@ export const runCommand = (cmd: string) =>
   Effect.tryPromise({
     try: () =>
       new Promise<string>((resolve, reject) => {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
         const { spawn } = require('child_process');
         const [command, ...args] = cmd.split(' ');
         const child = spawn(command, args, { stdio: 'pipe' });
@@ -18,7 +19,7 @@ export const runCommand = (cmd: string) =>
         );
         child.on('error', (e: Error) => reject(e));
       }),
-    catch: (e) => new Error(String(e)),
+    catch: e => new Error(String(e)),
   });
 
 export const parseNextLink = (link: string | null): string | '' => {

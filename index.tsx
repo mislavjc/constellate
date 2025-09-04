@@ -15,6 +15,7 @@ import * as fs from 'node:fs/promises';
 import { z } from 'zod';
 import slugify from 'slugify';
 import { gateway } from '@ai-sdk/gateway';
+import type { GatewayModelEntry } from '@ai-sdk/gateway';
 
 // Environment variables are loaded by the wrapper script
 import { ensureAuthenticatedToken, removeToken, whoAmI } from './lib/auth';
@@ -32,10 +33,13 @@ import {
   CONSTELLATE_MAX_NEW_CATEGORIES,
 } from './lib/config';
 import {
-  RepoFeature,
-  ConstellateStore,
-  StreamlinedPlan,
-  ExpandPlanPlus,
+  ConstellateStoreSchema,
+  StreamlinedPlanSchema,
+  ExpandPlanPlusSchema,
+  type RepoFeature,
+  type ConstellateStore,
+  type Category,
+  RepoFactsSchema,
 } from './lib/schemas';
 import { aiPass0FactsExtractorStreaming } from './lib/ai';
 import { aiPass1ExpandStreaming } from './lib/ai';
@@ -54,7 +58,7 @@ import { aiPass2StreamlineStreaming } from './lib/ai';
 import { aiPass25BudgetConsolidate } from './lib/ai';
 import { getConfiguredPolicies } from './lib/budget';
 import { aiPass3QualityAssuranceStreaming } from './lib/ai';
-import { QaFix, Category } from './lib/schemas';
+import { QaFixSchema } from './lib/schemas';
 
 // ----------------------------------- Layout Component -----------------------------------
 
@@ -85,25 +89,25 @@ const StepLayout: React.FC<StepLayoutProps> = ({
   const contentWidth = Math.min((stdout?.columns ?? 80) - 4, 100);
 
   return (
-    <Box flexDirection="column" width={contentWidth}>
+    <Box flexDirection='column' width={contentWidth}>
       {/* Header */}
-      <Text color="blue" bold>
+      <Text color='blue' bold>
         {title}
       </Text>
 
       {/* Step indicator with progress */}
       {currentStep && totalSteps && (
-        <Box flexDirection="column" marginBottom={2} marginTop={1}>
+        <Box flexDirection='column' marginBottom={2} marginTop={1}>
           <Box marginBottom={1}>
-            <Text color="cyan" dimColor>
+            <Text color='cyan' dimColor>
               Step {currentStep} of {totalSteps}
             </Text>
           </Box>
           {showProgress && progress !== undefined && (
-            <Box flexDirection="column" marginTop={1}>
+            <Box flexDirection='column' marginTop={1}>
               <ProgressBar value={Math.min(100, Math.max(0, progress))} />
               <Box marginTop={1}>
-                <Text color="gray" dimColor>
+                <Text color='gray' dimColor>
                   {Math.round(progress)}% complete
                 </Text>
               </Box>
@@ -115,7 +119,7 @@ const StepLayout: React.FC<StepLayoutProps> = ({
       {/* Description */}
       {description && (
         <Box marginBottom={1}>
-          <Text color="gray" dimColor>
+          <Text color='gray' dimColor>
             {description}
           </Text>
         </Box>
@@ -123,10 +127,10 @@ const StepLayout: React.FC<StepLayoutProps> = ({
 
       {/* Progress bar (when no step indicator) */}
       {showProgress && progress !== undefined && !currentStep && (
-        <Box flexDirection="column" marginTop={1} marginBottom={1}>
+        <Box flexDirection='column' marginTop={1} marginBottom={1}>
           <ProgressBar value={Math.min(100, Math.max(0, progress))} />
           <Box marginTop={1}>
-            <Text color="gray" dimColor>
+            <Text color='gray' dimColor>
               {Math.round(progress)}% complete
             </Text>
           </Box>
@@ -138,35 +142,33 @@ const StepLayout: React.FC<StepLayoutProps> = ({
 
       {/* Saved Configuration Footer */}
       {savedConfig && Object.keys(savedConfig).length > 0 && (
-        <Box flexDirection="column" marginTop={2}>
+        <Box flexDirection='column' marginTop={2}>
           <Box
-            flexDirection="column"
+            flexDirection='column'
             paddingY={1}
             paddingX={2}
-            borderStyle="single"
-            borderColor="gray"
+            borderStyle='single'
+            borderColor='gray'
           >
             <Box marginBottom={1}>
-              <Text color="green" bold>
+              <Text color='green' bold>
                 ✅ Loaded saved configuration from .constellator/config.json
               </Text>
             </Box>
             <Box marginBottom={1}>
-              <Text color="yellow" bold>
+              <Text color='yellow' bold>
                 📋 Current Configuration:
               </Text>
             </Box>
             {Object.entries(savedConfig).map(([key, value]) => {
-              const configOption = CONFIG_OPTIONS.find(
-                (opt) => opt.key === key
-              );
+              const configOption = CONFIG_OPTIONS.find(opt => opt.key === key);
               const displayName = configOption?.label || key;
               const displayValue = key.toLowerCase().includes('token')
                 ? '••••••••'
                 : value;
               return (
                 <Box key={key} marginBottom={1}>
-                  <Text color="gray">
+                  <Text color='gray'>
                     {'  '}
                     {displayName}: {displayValue}
                   </Text>
@@ -240,12 +242,15 @@ const ModelSelector: React.FC<{
   currentValue: string;
   onCancel: () => void;
 }> = ({ onModelSelect, currentValue, onCancel }) => {
-  const [availableModels, setAvailableModels] = useState<any[]>([]);
+  const [availableModels, setAvailableModels] = useState<GatewayModelEntry[]>(
+    []
+  );
   const [providers, setProviders] = useState<string[]>([]);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { stdout } = useStdout();
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const contentWidth = Math.min((stdout?.columns ?? 80) - 4, 100);
 
   const getCurrentStep = () => (selectedProvider ? 2 : 1);
@@ -257,26 +262,22 @@ const ModelSelector: React.FC<{
       try {
         const result = await gateway.getAvailableModels();
         const languageModels = result.models.filter(
-          (m: any) => m.modelType === 'language'
+          m => m.modelType === 'language'
         );
         setAvailableModels(languageModels);
 
         // Extract unique providers
         const uniqueProviders = [
           ...new Set(
-            languageModels.map((m: any) => {
-              return (
-                m.provider ||
-                m.providerName ||
-                m.company ||
-                m.vendor ||
-                (m.id && m.id.includes('/') ? m.id.split('/')[0] : 'Unknown')
-              );
+            languageModels.map(m => {
+              return m.id && m.id.includes('/')
+                ? m.id.split('/')[0]
+                : 'Unknown';
             })
           ),
-        ].filter((p) => p !== 'Unknown');
+        ].filter(p => p !== 'Unknown');
 
-        setProviders(uniqueProviders.sort());
+        setProviders(uniqueProviders.filter(p => p !== undefined).sort());
 
         // Don't auto-select provider - let user choose
         // The currentValue is just for reference if they skip to default
@@ -312,26 +313,18 @@ const ModelSelector: React.FC<{
 
   // Filter models by selected provider
   const filteredModels = selectedProvider
-    ? availableModels.filter((m: any) => {
+    ? availableModels.filter(m => {
         const modelProvider =
-          m.provider ||
-          m.providerName ||
-          m.company ||
-          m.vendor ||
-          (m.id && m.id.includes('/') ? m.id.split('/')[0] : 'Unknown');
+          m.id && m.id.includes('/') ? m.id.split('/')[0] : 'Unknown';
         return modelProvider === selectedProvider;
       })
     : [];
 
   // Create provider options
-  const providerOptions = providers.map((provider) => {
-    const providerModels = availableModels.filter((m: any) => {
+  const providerOptions = providers.map(provider => {
+    const providerModels = availableModels.filter(m => {
       const modelProvider =
-        m.provider ||
-        m.providerName ||
-        m.company ||
-        m.vendor ||
-        (m.id && m.id.includes('/') ? m.id.split('/')[0] : 'Unknown');
+        m.id && m.id.includes('/') ? m.id.split('/')[0] : 'Unknown';
       return modelProvider === provider;
     });
 
@@ -342,11 +335,11 @@ const ModelSelector: React.FC<{
   });
 
   // Create model options for selected provider
-  const modelOptions = filteredModels.map((model) => {
+  const modelOptions = filteredModels.map(model => {
     const pricing = model.pricing
       ? ` ($${formatPricePerMillion(
-          model.pricing.input
-        )}/$${formatPricePerMillion(model.pricing.output)})`
+          Number(model.pricing.input)
+        )}/$${formatPricePerMillion(Number(model.pricing.output))})`
       : '';
 
     return {
@@ -358,16 +351,16 @@ const ModelSelector: React.FC<{
   if (loading) {
     return (
       <StepLayout
-        title="🤖 Select AI Model"
-        description="Loading available models..."
+        title='🤖 Select AI Model'
+        description='Loading available models...'
         currentStep={1}
         totalSteps={2}
         progress={0}
       >
-        <StatusMessage variant="info">
+        <StatusMessage variant='info'>
           Loading available models...
         </StatusMessage>
-        <UiSpinner label="Fetching models" />
+        <UiSpinner label='Fetching models' />
       </StepLayout>
     );
   }
@@ -375,25 +368,25 @@ const ModelSelector: React.FC<{
   if (error) {
     return (
       <StepLayout
-        title="🤖 Select AI Model"
-        description="Failed to load models"
+        title='🤖 Select AI Model'
+        description='Failed to load models'
         currentStep={1}
         totalSteps={2}
         progress={0}
         footer={
-          <Text color="gray" dimColor>
+          <Text color='gray' dimColor>
             Press ESC to return to configuration
           </Text>
         }
       >
-        <Alert variant="error">Failed to load models: {error}</Alert>
+        <Alert variant='error'>Failed to load models: {error}</Alert>
       </StepLayout>
     );
   }
 
   return (
     <StepLayout
-      title="🤖 Select AI Model"
+      title='🤖 Select AI Model'
       description={
         selectedProvider
           ? `Select model from ${selectedProvider}`
@@ -403,7 +396,7 @@ const ModelSelector: React.FC<{
       totalSteps={getTotalSteps()}
       progress={getProgress()}
       footer={
-        <Text color="gray" dimColor>
+        <Text color='gray' dimColor>
           {selectedProvider
             ? `Press ESC to go back to providers • ${modelOptions.length} models available`
             : `Press ESC to return to configuration • Press TAB to use ${currentValue} • ${providers.length} providers available`}
@@ -412,26 +405,26 @@ const ModelSelector: React.FC<{
     >
       {!selectedProvider ? (
         // Provider Selection
-        <Box flexDirection="column">
-          <Text color="cyan" bold>
+        <Box flexDirection='column'>
+          <Text color='cyan' bold>
             Select Provider:
           </Text>
           <Newline />
           <Select
             options={providerOptions}
-            onChange={(value) => setSelectedProvider(value)}
+            onChange={value => setSelectedProvider(value)}
           />
         </Box>
       ) : (
         // Model Selection
-        <Box flexDirection="column">
-          <Text color="cyan" bold>
+        <Box flexDirection='column'>
+          <Text color='cyan' bold>
             Select Model from {selectedProvider}:
           </Text>
           <Newline />
           <Select
             options={modelOptions}
-            onChange={(value) => onModelSelect(value)}
+            onChange={value => onModelSelect(value)}
           />
         </Box>
       )}
@@ -450,13 +443,42 @@ const InteractiveConfigApp: React.FC<{
   const [showModelSelector, setShowModelSelector] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
 
+  // All hooks must be called at the top level, before any conditional logic
+  useInput((input, _key) => {
+    if (_key.tab) {
+      // Skip to default for any option
+      handleSkip();
+    } else if (_key.escape) {
+      if (isEditing) {
+        setIsEditing(false);
+        setInputValue('');
+      } else if (currentIndex > 0) {
+        // Go back to previous option
+        setCurrentIndex(currentIndex - 1);
+        setShowModelSelector(false);
+        setInputValue('');
+      }
+    } else if (_key.return && currentOption) {
+      if (currentOption.type === 'model-select') {
+        setShowModelSelector(true);
+      } else if (!isEditing) {
+        // Begin editing this option
+        const existing =
+          configValues[currentOption.key] ||
+          getEffectiveDefault(currentOption.key);
+        setInputValue(String(existing));
+        setIsEditing(true);
+      }
+    }
+  });
+
   const currentOption = CONFIG_OPTIONS[currentIndex];
 
-  // Guard against invalid index
+  // Guard against invalid index after hooks
   if (!currentOption) {
     return (
-      <StepLayout title="⚙️ Constellator Configuration Setup">
-        <Alert variant="error">Invalid configuration option index</Alert>
+      <StepLayout title='⚙️ Constellator Configuration Setup'>
+        <Alert variant='error'>Invalid configuration option index</Alert>
       </StepLayout>
     );
   }
@@ -465,7 +487,7 @@ const InteractiveConfigApp: React.FC<{
 
   // Helper: find option definition by key
   const getOptionByKey = (key: string) =>
-    CONFIG_OPTIONS.find((opt) => opt.key === key);
+    CONFIG_OPTIONS.find(opt => opt.key === key);
 
   // Compute effective (possibly derived) default values based on earlier answers
   const getEffectiveDefault = (key: string): string => {
@@ -555,39 +577,11 @@ const InteractiveConfigApp: React.FC<{
     }
   };
 
-  useInput((input, key) => {
-    if (key.tab) {
-      // Skip to default for any option
-      handleSkip();
-    } else if (key.escape) {
-      if (isEditing) {
-        setIsEditing(false);
-        setInputValue('');
-      } else if (currentIndex > 0) {
-        // Go back to previous option
-        setCurrentIndex(currentIndex - 1);
-        setShowModelSelector(false);
-        setInputValue('');
-      }
-    } else if (key.return) {
-      if (currentOption.type === 'model-select') {
-        setShowModelSelector(true);
-      } else if (!isEditing) {
-        // Begin editing this option
-        const existing =
-          configValues[currentOption.key] ||
-          getEffectiveDefault(currentOption.key);
-        setInputValue(String(existing));
-        setIsEditing(true);
-      }
-    }
-  });
-
   // Show model selector if active
   if (showModelSelector && currentOption.type === 'model-select') {
     return (
       <ModelSelector
-        onModelSelect={(modelId) => {
+        onModelSelect={modelId => {
           handleNext(modelId);
           setShowModelSelector(false);
         }}
@@ -602,28 +596,29 @@ const InteractiveConfigApp: React.FC<{
 
   return (
     <StepLayout
-      title="⚙️ Constellator Configuration Setup"
+      title='⚙️ Constellator Configuration Setup'
       currentStep={currentIndex + 1}
       totalSteps={CONFIG_OPTIONS.length}
       progress={progress}
       savedConfig={savedConfig}
       footer={
-        <StatusMessage variant="info">
-          Tip: You can re-run this setup anytime with 'constellator config'
+        <StatusMessage variant='info'>
+          Tip: You can re-run this setup anytime with &apos;constellator
+          config&apos;
         </StatusMessage>
       }
     >
-      <Box flexDirection="column" paddingX={2}>
-        <Text color="yellow" bold>
+      <Box flexDirection='column' paddingX={2}>
+        <Text color='yellow' bold>
           {currentOption.label}
         </Text>
-        <Text color="gray" dimColor>
+        <Text color='gray' dimColor>
           {currentOption.description}
         </Text>
         <Newline />
 
-        <Box flexDirection="column" marginBottom={1}>
-          <Text color="green">
+        <Box flexDirection='column' marginBottom={1}>
+          <Text color='green'>
             Current value:{' '}
             {currentOption.isSecret
               ? '••••••••'
@@ -633,20 +628,20 @@ const InteractiveConfigApp: React.FC<{
         </Box>
 
         {currentOption.type === 'model-select' ? (
-          <Box flexDirection="column">
+          <Box flexDirection='column'>
             <Box marginBottom={1}>
-              <Text color="cyan">Choose your AI model:</Text>
+              <Text color='cyan'>Choose your AI model:</Text>
             </Box>
-            <Text color="gray" dimColor>
+            <Text color='gray' dimColor>
               Press ENTER to browse models • Press TAB to use default • ESC to
               go back
             </Text>
           </Box>
         ) : (
-          <Box flexDirection="column">
+          <Box flexDirection='column'>
             {!isEditing ? (
               <>
-                <Text color="gray" dimColor>
+                <Text color='gray' dimColor>
                   Press ENTER to edit • Press TAB to use recommended • ESC to go
                   back
                 </Text>
@@ -665,7 +660,7 @@ const InteractiveConfigApp: React.FC<{
             ) : (
               <>
                 <Box marginBottom={1}>
-                  <Text color="cyan">Enter new value:</Text>
+                  <Text color='cyan'>Enter new value:</Text>
                 </Box>
                 <Box marginBottom={1}>
                   <TextInput
@@ -675,7 +670,7 @@ const InteractiveConfigApp: React.FC<{
                     onSubmit={handleNext}
                   />
                 </Box>
-                <Text color="gray" dimColor>
+                <Text color='gray' dimColor>
                   Press ENTER to confirm • Press TAB to use recommended • ESC to
                   cancel edit
                 </Text>
@@ -725,9 +720,9 @@ function toRepoFeatures(
 
 function makeStoreFromStreamlined(
   allRepos: RepoFeature[],
-  streamlined: z.infer<typeof StreamlinedPlan>
+  streamlined: z.infer<typeof StreamlinedPlanSchema>
 ): ConstellateStore {
-  const store = ConstellateStore.parse({
+  const store = ConstellateStoreSchema.parse({
     generated_at: new Date().toISOString(),
   });
 
@@ -761,7 +756,7 @@ function makeStoreFromStreamlined(
   }
 
   // Index repos by id for quality fields
-  const repoById = new Map(allRepos.map((r) => [r.id, r] as const));
+  const repoById = new Map(allRepos.map(r => [r.id, r] as const));
 
   // Assign repos (primary only in this pass)
   for (const r of streamlined.repos) {
@@ -845,7 +840,7 @@ function renderReadme(
 
   // Filter out categories with no repositories and optionally filter by minimum size
   const categoriesWithRepos = filterCategoriesForReadme(store, minSize).filter(
-    (c) => c.repos.length > 0
+    c => c.repos.length > 0
   );
 
   lines.push('## Table of Contents');
@@ -853,7 +848,7 @@ function renderReadme(
   lines.push('');
 
   // Create a map of repo features by ID for quick lookup
-  const featuresById = new Map(features.map((f) => [f.id, f]));
+  const featuresById = new Map(features.map(f => [f.id, f]));
 
   for (const c of categoriesWithRepos) {
     lines.push(`## ${c.title}`);
@@ -903,8 +898,8 @@ const StarFetchingApp: React.FC<{
   const [isComplete, setIsComplete] = useState(false);
 
   // Handle keyboard input for quitting
-  useInput((input, key) => {
-    if (input === 'q') {
+  useInput(_input => {
+    if (_input === 'q') {
       console.log('\n👋 Exiting Constellator...');
       process.exit(0);
     }
@@ -944,8 +939,8 @@ const StarFetchingApp: React.FC<{
             throw new Error(`GitHub API error: ${response.status}`);
           }
 
-          const batch = (await response.json()) as any[];
-          const processedBatch: StarredRepo[] = batch.map((repo) => ({
+          const batch = (await response.json()) as StarredRepo[];
+          const processedBatch = batch.map(repo => ({
             full_name: repo.full_name,
             description: repo.description,
             html_url: repo.html_url,
@@ -975,7 +970,7 @@ const StarFetchingApp: React.FC<{
           url = nextMatch?.[1] ?? '';
 
           // Add a small delay to avoid overwhelming the API and UI
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          await new Promise(resolve => setTimeout(resolve, 50));
         }
 
         setFetchingPhase('complete');
@@ -994,7 +989,8 @@ const StarFetchingApp: React.FC<{
     };
 
     fetchStarsWithProgress();
-  }, [token, maxRepos, onStarsFetched]);
+    //
+  }, [token, maxRepos, onStarsFetched, timeoutMs]);
 
   const getTitle = () => {
     const phaseTitles = {
@@ -1039,7 +1035,7 @@ const StarFetchingApp: React.FC<{
   const getFooter = () => {
     if (fetchingPhase === 'fetching') {
       return (
-        <Text color="gray" dimColor>
+        <Text color='gray' dimColor>
           Batch {currentBatch} • Press Q to quit
         </Text>
       );
@@ -1052,23 +1048,23 @@ const StarFetchingApp: React.FC<{
       case 'connecting':
         return (
           <>
-            <StatusMessage variant="info">
+            <StatusMessage variant='info'>
               Connecting to GitHub...
             </StatusMessage>
-            <UiSpinner label="Connecting" />
+            <UiSpinner label='Connecting' />
           </>
         );
 
       case 'fetching':
         return (
           <>
-            <Text color="cyan">
+            <Text color='cyan'>
               📥 Fetching starred repositories from GitHub...
             </Text>
             <Newline />
 
-            <Box flexDirection="column" marginBottom={1}>
-              <Text color="yellow">
+            <Box flexDirection='column' marginBottom={1}>
+              <Text color='yellow'>
                 Progress: {starsFetched} repositories fetched
                 {isComplete &&
                   starsFetched >= maxRepos &&
@@ -1078,14 +1074,14 @@ const StarFetchingApp: React.FC<{
             </Box>
 
             {recentStars.length > 0 && (
-              <Box flexDirection="column" marginTop={1}>
-                <Text color="cyan" bold>
+              <Box flexDirection='column' marginTop={1}>
+                <Text color='cyan' bold>
                   Latest repositories:
                 </Text>
                 <UnorderedList>
                   {recentStars.map((star, idx) => (
                     <UnorderedList.Item key={idx}>
-                      <Text color="green">
+                      <Text color='green'>
                         {star.full_name} ({star.stargazers_count} ⭐)
                       </Text>
                     </UnorderedList.Item>
@@ -1099,15 +1095,15 @@ const StarFetchingApp: React.FC<{
       case 'complete':
         return (
           <>
-            <StatusMessage variant="success">
+            <StatusMessage variant='success'>
               Found {starsFetched} starred repositories
               {starsFetched >= maxRepos ? ` (limited to ${maxRepos})` : ''}!
             </StatusMessage>
             <Newline />
-            <StatusMessage variant="info">
+            <StatusMessage variant='info'>
               Starting AI processing...
             </StatusMessage>
-            <UiSpinner label="Processing" />
+            <UiSpinner label='Processing' />
           </>
         );
 
@@ -1159,12 +1155,28 @@ const ConstellateStreamingApp: React.FC<{
   const [totalSteps, setTotalSteps] = useState(0);
   const [currentBatch, setCurrentBatch] = useState(0);
   const [totalBatches, setTotalBatches] = useState(0);
-  const [streamingData, setStreamingData] = useState<any>(null);
+  const [streamingData, setStreamingData] = useState<{
+    totalProcessed?: number;
+    batch?: number;
+    totalBatches?: number;
+    phase?: string;
+    partialResult?: any;
+    categoriesCount?: number;
+    factsCount?: number;
+    repoCount?: number;
+    summariesCount?: number;
+    aliasesCount?: number;
+    deleteCount?: number;
+    reassignCount?: number;
+    reposCount?: number;
+    repositories?: { name: string; language: string; stars: number }[];
+    streamingHistory?: unknown[];
+  } | null>(null);
   const [processedRepos, setProcessedRepos] = useState<ProcessedRepo[]>([]);
   const [aiPhase, setAiPhase] = useState<
     'pass0' | 'pass1' | 'pass2' | 'pass3' | null
   >(null);
-  const [allBatchesData, setAllBatchesData] = useState<any[]>([]);
+  const [allBatchesData, setAllBatchesData] = useState<unknown[]>([]);
   const [selectedBatchIndex, setSelectedBatchIndex] = useState(0);
   const [features, setFeatures] = useState<RepoFeature[]>([]);
 
@@ -1178,9 +1190,9 @@ const ConstellateStreamingApp: React.FC<{
     ) {
       // Allow panning between batches during AI processing (except Pass-1)
       if (key.leftArrow || input === 'h') {
-        setSelectedBatchIndex((prev) => Math.max(0, prev - 1));
+        setSelectedBatchIndex(prev => Math.max(0, prev - 1));
       } else if (key.rightArrow || input === 'l') {
-        setSelectedBatchIndex((prev) =>
+        setSelectedBatchIndex(prev =>
           Math.min(allBatchesData.length - 1, prev)
         );
       } else if (input === 'q') {
@@ -1237,55 +1249,76 @@ const ConstellateStreamingApp: React.FC<{
         try {
           const factsStreamingGenerator =
             aiPass0FactsExtractorStreaming(repoFeatures);
-          let finalFactsResult: any = null;
+          let finalFactsResult: z.infer<typeof RepoFactsSchema> | null = null;
 
           for await (const partialResult of factsStreamingGenerator) {
             // Update streaming data for UI - accumulate total processed count
-            setStreamingData((prevData: any) => {
-              const currentBatchCount = partialResult?.results?.length || 0;
+            setStreamingData(prevData => {
+              const currentBatchCount =
+                (partialResult as { results?: unknown[] })?.results?.length ||
+                0;
               const previousTotal = prevData?.totalProcessed || 0;
               return {
+                ...prevData,
                 phase: 'pass0',
-                partialResult,
+                partialResult: partialResult as { results?: unknown[] },
                 factsCount: currentBatchCount,
                 totalProcessed: previousTotal + currentBatchCount,
               };
             });
             // Always update final result with the latest partial
-            finalFactsResult = partialResult as any;
+            finalFactsResult = partialResult as z.infer<typeof RepoFactsSchema>;
           }
 
           if (finalFactsResult) {
-            graftFactsIntoFeatures(repoFeatures, finalFactsResult);
+            graftFactsIntoFeatures(
+              repoFeatures,
+              finalFactsResult as {
+                results?: {
+                  id: string;
+                  facts?: z.infer<typeof RepoFactsSchema>;
+                  purpose?: string;
+                  keywords?: string[];
+                  capabilities?: string[];
+                  tech_stack?: string[];
+                }[];
+              }
+            );
             setFeatures([...repoFeatures]); // Update state with facts
           }
-        } catch (e: any) {
-          e.message = `[PASS-0] ${e.message}`;
+        } catch (e) {
+          if (e instanceof Error) {
+            e.message = `[PASS-0] ${e.message}`;
+          }
           throw e;
         }
 
         // Pass-1: Expand with summaries
         setAiPhase('pass1');
-        let merged: any = null;
+        let merged = null;
         try {
           const batches = batch(repoFeatures, Math.max(1, batchSize || 4));
           setTotalBatches(batches.length);
 
-          const expandPlans: z.infer<typeof ExpandPlanPlus>[] = [];
-          const batchData: any[] = [];
+          const expandPlans: z.infer<typeof ExpandPlanPlusSchema>[] = [];
+          const batchData: {
+            batchNumber: number;
+            repositories: { name: string; language: string; stars: number }[];
+            streamingHistory?: unknown[];
+            finalResult?: z.infer<typeof ExpandPlanPlusSchema>;
+          }[] = [];
 
           // Initialize batch data with repository information
           for (const [i, b] of batches.entries()) {
             batchData.push({
               batchNumber: i + 1,
-              repositories: b.map((repo) => ({
-                id: repo.id,
+              repositories: b.map(repo => ({
                 name: repo.name,
-                language: repo.language,
-                description: repo.description,
+                language: repo.language || 'Unknown',
+                stars: repo.stars,
               })),
               streamingHistory: [],
-              finalResult: null,
+              finalResult: undefined,
             });
           }
           setAllBatchesData(batchData);
@@ -1296,8 +1329,9 @@ const ConstellateStreamingApp: React.FC<{
             setSelectedBatchIndex(i); // Follow current processing batch
 
             const streamingGenerator = aiPass1ExpandStreaming(b);
-            let finalBatchResult: z.infer<typeof ExpandPlanPlus> | null = null;
-            const streamingHistory: any[] = [];
+            let finalBatchResult: z.infer<typeof ExpandPlanPlusSchema> | null =
+              null;
+            const streamingHistory: unknown[] = [];
 
             for await (const partialResult of streamingGenerator) {
               const streamingUpdate = {
@@ -1311,15 +1345,15 @@ const ConstellateStreamingApp: React.FC<{
               streamingHistory.push(streamingUpdate);
 
               // Update batch data
-              batchData[i].streamingHistory = [...streamingHistory];
+              batchData[i]!.streamingHistory = [...streamingHistory];
 
               setStreamingData({
                 batch: i + 1,
                 totalBatches: batches.length,
                 phase: 'pass1',
-                partialResult,
+                partialResult: partialResult as any,
                 repoCount: b.length,
-                repositories: batchData[i].repositories,
+                repositories: batchData[i]!.repositories,
                 streamingHistory: [...streamingHistory],
               });
 
@@ -1333,9 +1367,9 @@ const ConstellateStreamingApp: React.FC<{
                 partialResult.summaries
               ) {
                 finalBatchResult = partialResult as z.infer<
-                  typeof ExpandPlanPlus
+                  typeof ExpandPlanPlusSchema
                 >;
-                batchData[i].finalResult = finalBatchResult;
+                batchData[i]!.finalResult = finalBatchResult;
               }
             }
 
@@ -1351,8 +1385,10 @@ const ConstellateStreamingApp: React.FC<{
             );
           }
           graftSummariesIntoFeatures(repoFeatures, merged.summaries);
-        } catch (e: any) {
-          e.message = `[PASS-1] ${e.message}`;
+        } catch (e) {
+          if (e instanceof Error) {
+            e.message = `[PASS-1] ${e.message}`;
+          }
           throw e;
         }
 
@@ -1370,32 +1406,32 @@ const ConstellateStreamingApp: React.FC<{
             merged,
             refinePolicies
           );
-          let finalRefined: any = null;
+          let finalRefined: unknown = null;
           for await (const partial of refineGen) {
-            finalRefined = partial as any;
+            finalRefined = partial;
             setStreamingData({
               phase: 'pass1',
-              partialResult: finalRefined,
-              categoriesCount: finalRefined?.categories?.length || 0,
-              summariesCount: finalRefined?.summaries?.length || 0,
-              assignmentsCount: finalRefined?.assignments?.length || 0,
+              partialResult: finalRefined as any,
+              categoriesCount: (finalRefined as any)?.categories?.length || 0,
+              summariesCount: (finalRefined as any)?.summaries?.length || 0,
             });
           }
           if (
             finalRefined &&
-            finalRefined.categories &&
-            finalRefined.assignments
+            (finalRefined as any).categories &&
+            (finalRefined as any).assignments
           ) {
-            merged = await mergeExpandPlans([merged, finalRefined]);
+            merged = await mergeExpandPlans([merged, finalRefined as any]);
             graftSummariesIntoFeatures(repoFeatures, merged.summaries);
           }
-        } catch (e: any) {
+        } catch {
           // Non-fatal: continue with existing merged
         }
 
         // Pass 2: Streamline with streaming
         setAiPhase('pass2');
-        let finalStreamlined: z.infer<typeof StreamlinedPlan> | null = null;
+        let finalStreamlined: z.infer<typeof StreamlinedPlanSchema> | null =
+          null;
         const policies = getConfiguredPolicies(repoFeatures.length);
         try {
           const streamlinedGenerator = aiPass2StreamlineStreaming(
@@ -1404,27 +1440,25 @@ const ConstellateStreamingApp: React.FC<{
             policies
           );
 
-          let pass2StreamCount = 0;
-          let lastCompleteResult: z.infer<typeof StreamlinedPlan> | null = null;
+          let lastCompleteResult: z.infer<typeof StreamlinedPlanSchema> | null =
+            null;
 
           for await (const partialResult of streamlinedGenerator) {
-            pass2StreamCount++;
-
             // Update streaming data for UI
             setStreamingData({
               phase: 'pass2',
-              partialResult,
-              categoriesCount: partialResult.categories?.length || 0,
-              aliasesCount: partialResult.aliases
-                ? Object.keys(partialResult.aliases).length
+              partialResult: partialResult as any,
+              categoriesCount: (partialResult as any).categories?.length || 0,
+              aliasesCount: (partialResult as any).aliases
+                ? Object.keys((partialResult as any).aliases).length
                 : 0,
-              reposCount: partialResult.repos?.length || 0,
+              reposCount: (partialResult as any).repos?.length || 0,
             });
 
             // Only update final result if this partial has the required structure
             if (partialResult && typeof partialResult === 'object') {
               lastCompleteResult = partialResult as z.infer<
-                typeof StreamlinedPlan
+                typeof StreamlinedPlanSchema
               >;
             }
           }
@@ -1443,36 +1477,55 @@ const ConstellateStreamingApp: React.FC<{
             );
 
             // Try to create fallback repos from merged assignments
-            let fallbackRepos: any[] = [];
+            let fallbackRepos: {
+              id: string;
+              primaryCategory: string;
+              reason: string;
+            }[] = [];
             if (merged && merged.assignments && merged.assignments.length > 0) {
-              fallbackRepos = merged.assignments.map((assignment: any) => ({
-                id: assignment.repo,
-                primaryCategory:
-                  assignment.categories?.[0]?.key || 'uncategorized',
-                reason:
-                  assignment.categories?.[0]?.reason || 'Fallback assignment',
-                tags: assignment.categories?.[0]?.tags || [],
-                confidence: 0.5,
-              }));
+              fallbackRepos = merged.assignments.map(
+                (assignment: {
+                  repo: string;
+                  categories?: {
+                    key?: string;
+                    reason?: string;
+                    tags?: string[];
+                  }[];
+                }) => ({
+                  id: assignment.repo,
+                  primaryCategory:
+                    assignment.categories?.[0]?.key || 'uncategorized',
+                  reason:
+                    assignment.categories?.[0]?.reason || 'Fallback assignment',
+                  tags: assignment.categories?.[0]?.tags || [],
+                  confidence: 0.5,
+                })
+              );
             }
 
             finalStreamlined = {
               categories: merged?.categories || [],
               aliases: {},
-              repos: fallbackRepos,
+              repos: fallbackRepos.map(repo => ({
+                ...repo,
+                tags: [] as string[],
+                confidence: 0.5,
+              })) as any,
             };
           }
 
           // Ensure all repositories are assigned (no missing repos)
           try {
             const assigned = new Set(
-              (finalStreamlined?.repos || []).map((r: any) => r.id)
+              (finalStreamlined!.repos || []).map((r: { id: string }) => r.id)
             );
-            const missing = repoFeatures.filter((f) => !assigned.has(f.id));
+            const missing = repoFeatures.filter(f => !assigned.has(f.id));
             if (missing.length > 0) {
               // Determine dominant category among already-assigned repos
               const freq = new Map<string, number>();
-              for (const r of finalStreamlined.repos as any[]) {
+              for (const r of finalStreamlined!.repos as {
+                primaryCategory?: string;
+              }[]) {
                 const slug = slugify(r.primaryCategory || '', {
                   lower: true,
                   strict: true,
@@ -1492,18 +1545,19 @@ const ConstellateStreamingApp: React.FC<{
               // If none yet, prefer a common canonical category if proposed
               if (!dominantSlug && merged?.categories?.length) {
                 const preferred = merged.categories.find(
-                  (c: any) =>
+                  (c: { slug?: string; title?: string }) =>
                     slugify(c.slug || c.title || '', {
                       lower: true,
                       strict: true,
                       trim: true,
                     }) === 'libraries'
                 );
+                const firstCategory = merged.categories[0];
                 dominantSlug = preferred
                   ? 'libraries'
                   : slugify(
-                      merged.categories[0].slug ||
-                        merged.categories[0].title ||
+                      firstCategory?.slug ||
+                        firstCategory?.title ||
                         'libraries',
                       {
                         lower: true,
@@ -1516,7 +1570,11 @@ const ConstellateStreamingApp: React.FC<{
               const mergedAssignIndex: Record<string, string> = {};
               if (merged && Array.isArray(merged.assignments)) {
                 for (const a of merged.assignments) {
-                  if (a?.repo && a?.categories?.[0]?.key) {
+                  if (
+                    a?.repo &&
+                    Array.isArray(a.categories) &&
+                    a.categories[0]?.key
+                  ) {
                     mergedAssignIndex[a.repo] = slugify(a.categories[0].key, {
                       lower: true,
                       strict: true,
@@ -1529,7 +1587,7 @@ const ConstellateStreamingApp: React.FC<{
               for (const m of missing) {
                 const inferred =
                   mergedAssignIndex[m.id] || dominantSlug || 'libraries';
-                (finalStreamlined.repos as any[]).push({
+                finalStreamlined!.repos.push({
                   id: m.id,
                   primaryCategory: inferred,
                   reason: 'Auto-filled to ensure full coverage',
@@ -1538,13 +1596,17 @@ const ConstellateStreamingApp: React.FC<{
                 });
               }
             }
-          } catch {}
-        } catch (e: any) {
-          e.message = `[PASS-2] ${e.message}`;
+          } catch {
+            // Non-fatal: fallback to minimal structure
+          }
+        } catch (e) {
+          if (e instanceof Error) {
+            e.message = `[PASS-2] ${e.message}`;
+          }
           throw e;
         }
 
-        const store = makeStoreFromStreamlined(repoFeatures, finalStreamlined);
+        const store = makeStoreFromStreamlined(repoFeatures, finalStreamlined!);
 
         // Pass 2.5: Category budget consolidation
         setAiPhase('pass2');
@@ -1558,29 +1620,29 @@ const ConstellateStreamingApp: React.FC<{
             repoFeatures,
             budget
           );
-          let budgetFix: any = null;
+          let budgetFix: unknown = null;
           for await (const partial of budgetGen) {
-            budgetFix = partial as any;
+            budgetFix = partial;
             setStreamingData({
               phase: 'pass2',
-              partialResult: budgetFix,
-              categoriesCount: budgetFix?.categories?.length || 0,
-              aliasesCount: budgetFix?.aliases
-                ? Object.keys(budgetFix.aliases).length
+              partialResult: budgetFix as any,
+              categoriesCount: (budgetFix as any)?.categories?.length || 0,
+              aliasesCount: (budgetFix as any)?.aliases
+                ? Object.keys((budgetFix as any).aliases).length
                 : 0,
-              reassignCount: budgetFix?.reassign?.length || 0,
+              reassignCount: (budgetFix as any)?.reassign?.length || 0,
             });
           }
           if (budgetFix) {
-            applyQaFix(store, budgetFix);
+            applyQaFix(store, budgetFix as any);
           }
-        } catch (e) {
+        } catch {
           // proceed regardless
         }
 
         // Pass 3: Quality Assurance with streaming
         setAiPhase('pass3');
-        let finalQaFix: z.infer<typeof QaFix> | null = null;
+        let finalQaFix: z.infer<typeof QaFixSchema> | null = null;
         try {
           const qaGenerator = aiPass3QualityAssuranceStreaming(
             store,
@@ -1588,22 +1650,19 @@ const ConstellateStreamingApp: React.FC<{
             policies
           );
 
-          let pass3StreamCount = 0;
           for await (const partialResult of qaGenerator) {
-            pass3StreamCount++;
-            // Update streaming data for UI
             setStreamingData({
               phase: 'pass3',
-              partialResult,
-              categoriesCount: partialResult.categories?.length || 0,
-              aliasesCount: partialResult.aliases
-                ? Object.keys(partialResult.aliases).length
+              partialResult: partialResult as any,
+              categoriesCount: (partialResult as any).categories?.length || 0,
+              aliasesCount: (partialResult as any).aliases
+                ? Object.keys((partialResult as any).aliases).length
                 : 0,
-              deleteCount: partialResult.delete?.length || 0,
-              reassignCount: partialResult.reassign?.length || 0,
+              deleteCount: (partialResult as any).delete?.length || 0,
+              reassignCount: (partialResult as any).reassign?.length || 0,
             });
             // Always update final result with the latest partial
-            finalQaFix = partialResult as z.infer<typeof QaFix>;
+            finalQaFix = partialResult as z.infer<typeof QaFixSchema>;
           }
 
           if (!finalQaFix) {
@@ -1614,8 +1673,10 @@ const ConstellateStreamingApp: React.FC<{
 
           // Absorb QA aliases back into glossary for future runs
           await absorbAliasesIntoGlossary(finalQaFix);
-        } catch (e: any) {
-          e.message = `[PASS-3] ${e.message}`;
+        } catch (e) {
+          if (e instanceof Error) {
+            e.message = `[PASS-3] ${e.message}`;
+          }
           throw e;
         }
 
@@ -1643,7 +1704,9 @@ const ConstellateStreamingApp: React.FC<{
         if (openOnComplete) {
           try {
             await Bun.$`open ${outputFilename}`;
-          } catch {}
+          } catch {
+            // Ignore file opening errors
+          }
         }
 
         setCurrentPhase('complete');
@@ -1655,6 +1718,7 @@ const ConstellateStreamingApp: React.FC<{
     };
 
     processEverything();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stars, maxRepos, token, onFinish]);
 
   // Helper functions for rendering different phases
@@ -1717,28 +1781,38 @@ const ConstellateStreamingApp: React.FC<{
   const getTotalSteps = () => 3;
 
   // Helper function to render repository facts
-  const renderRepositoryFacts = (results: any[]) => {
+  const renderRepositoryFacts = (results: unknown[]) => {
     if (!results || results.length === 0) return null;
 
     return (
-      <Box flexDirection="column" paddingLeft={2} marginTop={1}>
-        <Text color="cyan" bold>
+      <Box flexDirection='column' paddingLeft={2} marginTop={1}>
+        <Text color='cyan' bold>
           Latest Facts Extracted:
         </Text>
-        {results.slice(-3).map((result: any, idx: number) => (
-          <Box key={idx} flexDirection="column" paddingLeft={2}>
-            <Text color="magenta" bold>
-              • {result.id?.split('/').pop() || 'Unknown'}
-            </Text>
-            <Text color="gray">
-              Purpose: {result.purpose?.slice(0, 50) || 'None'}...
-            </Text>
-            <Text color="gray">
-              Capabilities: {(result.capabilities || []).slice(0, 2).join(', ')}
-              {(result.capabilities || []).length > 2 ? '...' : ''}
-            </Text>
-          </Box>
-        ))}
+        {(results as any[]).slice(-3).map(
+          (
+            result: {
+              id?: string;
+              purpose?: string;
+              capabilities?: string[];
+            },
+            idx: number
+          ) => (
+            <Box key={idx} flexDirection='column' paddingLeft={2}>
+              <Text color='magenta' bold>
+                • {result.id?.split('/').pop() || 'Unknown'}
+              </Text>
+              <Text color='gray'>
+                Purpose: {result.purpose?.slice(0, 50) || 'None'}...
+              </Text>
+              <Text color='gray'>
+                Capabilities:{' '}
+                {(result.capabilities || []).slice(0, 2).join(', ')}
+                {(result.capabilities || []).length > 2 ? '...' : ''}
+              </Text>
+            </Box>
+          )
+        )}
       </Box>
     );
   };
@@ -1755,9 +1829,9 @@ const ConstellateStreamingApp: React.FC<{
       >
         {processedRepos.slice(-3).map((p, i) => (
           <Box key={i}>
-            <Text color="green">{p.repo.full_name}</Text>
+            <Text color='green'>{p.repo.full_name}</Text>
             {p.details && (
-              <Text color="gray"> ({p.details.stargazers_count} ⭐)</Text>
+              <Text color='gray'> ({p.details.stargazers_count} ⭐)</Text>
             )}
           </Box>
         ))}
@@ -1780,14 +1854,14 @@ const ConstellateStreamingApp: React.FC<{
     const getFooter = () => {
       if (allBatchesData.length > 1 && aiPhase === 'pass1') {
         return (
-          <Box flexDirection="column">
+          <Box flexDirection='column'>
             {isViewingCurrentBatch && totalBatches > 0 && (
               <UiSpinner
                 label={`Processing batch ${currentBatch} of ${totalBatches}`}
               />
             )}
             {!isViewingCurrentBatch && totalBatches > 0 && (
-              <Text color="gray" dimColor>
+              <Text color='gray' dimColor>
                 Viewing completed batch {selectedBatchIndex + 1} of{' '}
                 {totalBatches}
               </Text>
@@ -1807,15 +1881,15 @@ const ConstellateStreamingApp: React.FC<{
         footer={getFooter()}
       >
         {aiPhase === 'pass0' && (
-          <Box flexDirection="column">
+          <Box flexDirection='column'>
             <Box marginBottom={2}>
-              <Text color="cyan">
+              <Text color='cyan'>
                 Pass-0: Extracting factual signals from repository READMEs
               </Text>
             </Box>
 
             {/* Progress Bar */}
-            <Box flexDirection="column" marginTop={1} marginBottom={1}>
+            <Box flexDirection='column' marginTop={1} marginBottom={1}>
               <ProgressBar
                 value={
                   streamingData?.totalProcessed
@@ -1824,7 +1898,7 @@ const ConstellateStreamingApp: React.FC<{
                 }
               />
               <Box marginTop={1}>
-                <Text color="gray" dimColor>
+                <Text color='gray' dimColor>
                   {streamingData?.totalProcessed || 0} of {features.length}{' '}
                   repositories processed
                 </Text>
@@ -1833,14 +1907,14 @@ const ConstellateStreamingApp: React.FC<{
 
             {/* Facts Extraction */}
             {streamingData && streamingData.phase === 'pass0' && (
-              <Box flexDirection="column" marginTop={1}>
+              <Box flexDirection='column' marginTop={1}>
                 <Box marginBottom={1}>
-                  <Text color="yellow" bold>
+                  <Text color='yellow' bold>
                     🔴 Facts Extraction:
                   </Text>
                 </Box>
                 <Box paddingLeft={2} marginBottom={1}>
-                  <Text color="green">
+                  <Text color='green'>
                     Current batch: {streamingData.factsCount || 0} repositories
                   </Text>
                 </Box>
@@ -1850,7 +1924,7 @@ const ConstellateStreamingApp: React.FC<{
 
             {/* Initial loading message */}
             {!streamingData || streamingData.phase !== 'pass0' ? (
-              <Text color="green">
+              <Text color='green'>
                 Processing {features.length} repositories for facts
                 extraction...
               </Text>
@@ -1858,159 +1932,190 @@ const ConstellateStreamingApp: React.FC<{
           </Box>
         )}
 
-        {aiPhase === 'pass1' && currentBatchData && (
-          <Box flexDirection="column">
-            <Text color="cyan">
-              Batch {currentBatchData.batchNumber}: Analyzing{' '}
-              {currentBatchData.repositories.length} repositories
-            </Text>
+        {aiPhase === 'pass1' &&
+          currentBatchData &&
+          (currentBatchData as any) && (
+            <Box flexDirection='column'>
+              <Text color='cyan'>
+                Batch {(currentBatchData as any).batchNumber}: Analyzing{' '}
+                {(currentBatchData as any).repositories.length} repositories
+              </Text>
 
-            {/* Repository List */}
-            <Box flexDirection="column" marginTop={2}>
-              <Box marginBottom={1}>
-                <Text color="yellow" bold>
-                  Repositories in this batch:
-                </Text>
-              </Box>
-              {currentBatchData.repositories
-                .slice(0, 5)
-                .map((repo: any, idx: number) => (
-                  <Text key={idx} color="gray">
-                    • {repo.name} ({repo.language || 'Unknown'}, {repo.stars})
+              {/* Repository List */}
+              <Box flexDirection='column' marginTop={2}>
+                <Box marginBottom={1}>
+                  <Text color='yellow' bold>
+                    Repositories in this batch:
                   </Text>
-                ))}
-              {currentBatchData.repositories.length > 5 && (
-                <Text color="gray" dimColor>
-                  ... and {currentBatchData.repositories.length - 5} more
-                </Text>
+                </Box>
+                {(currentBatchData as any).repositories
+                  .slice(0, 5)
+                  .map(
+                    (
+                      repo: { name: string; language?: string; stars: number },
+                      idx: number
+                    ) => (
+                      <Text key={idx} color='gray'>
+                        • {repo.name} ({repo.language || 'Unknown'},{' '}
+                        {repo.stars})
+                      </Text>
+                    )
+                  )}
+                {(currentBatchData as any).repositories.length > 5 && (
+                  <Text color='gray' dimColor>
+                    ... and {(currentBatchData as any).repositories.length - 5}{' '}
+                    more
+                  </Text>
+                )}
+              </Box>
+
+              {/* Analysis Progress */}
+              {streamingData && streamingData.phase === 'pass1' && (
+                <Box flexDirection='column' marginTop={2}>
+                  <Box marginBottom={1}>
+                    <Text color='yellow' bold>
+                      🔄 Analysis Progress:
+                    </Text>
+                  </Box>
+
+                  {/* Current Progress */}
+                  <Box paddingLeft={2} marginBottom={1} gap={4}>
+                    <Text color='green'>
+                      Categories:{' '}
+                      {streamingData.partialResult?.categories?.length || 0}
+                    </Text>
+                    <Newline />
+                    <Text color='green'>
+                      Summaries:{' '}
+                      {streamingData.partialResult?.summaries?.length || 0}
+                    </Text>
+                    <Newline />
+                    <Text color='green'>
+                      Assignments:{' '}
+                      {streamingData.partialResult?.assignments?.length || 0}
+                    </Text>
+                  </Box>
+
+                  {/* Categories Preview */}
+                  {streamingData.partialResult?.categories &&
+                    streamingData.partialResult.categories.length > 0 && (
+                      <Box flexDirection='column' paddingLeft={2} marginTop={1}>
+                        <Box marginBottom={1}>
+                          <Text color='cyan' bold>
+                            Latest Categories:
+                          </Text>
+                        </Box>
+                        {streamingData.partialResult.categories
+                          .slice(-3) // Show last 3 categories
+                          .map(
+                            (
+                              cat: { title: string; description?: string },
+                              idx: number
+                            ) => (
+                              <Box
+                                key={idx}
+                                flexDirection='column'
+                                paddingLeft={2}
+                              >
+                                <Text color='blue' bold>
+                                  • {cat.title}
+                                </Text>
+                                {cat.description && (
+                                  <Text color='gray' dimColor>
+                                    {cat.description.slice(0, 60)}...
+                                  </Text>
+                                )}
+                              </Box>
+                            )
+                          )}
+                      </Box>
+                    )}
+
+                  {/* Summaries Preview */}
+                  {streamingData.partialResult?.summaries &&
+                    streamingData.partialResult.summaries.length > 0 && (
+                      <Box flexDirection='column' paddingLeft={2} marginTop={1}>
+                        <Box marginBottom={1}>
+                          <Text color='cyan' bold>
+                            Latest Summaries:
+                          </Text>
+                        </Box>
+                        {streamingData.partialResult.summaries
+                          .slice(-2) // Show last 2 summaries
+                          .filter(
+                            (summary: { id?: string; summary?: string }) =>
+                              summary && summary.id && summary.summary
+                          )
+                          .map(
+                            (
+                              summary: {
+                                id: string;
+                                summary: string;
+                                key_topics?: string[];
+                              },
+                              idx: number
+                            ) => (
+                              <Box
+                                key={idx}
+                                flexDirection='column'
+                                paddingLeft={2}
+                              >
+                                <Text color='magenta' bold>
+                                  • {summary.id?.split('/').pop() || 'Unknown'}
+                                </Text>
+                                <Text color='white'>
+                                  {summary.summary?.slice(0, 80) ||
+                                    'No summary available'}
+                                  ...
+                                </Text>
+                              </Box>
+                            )
+                          )}
+                      </Box>
+                    )}
+                </Box>
               )}
             </Box>
-
-            {/* Analysis Progress */}
-            {streamingData && streamingData.phase === 'pass1' && (
-              <Box flexDirection="column" marginTop={2}>
-                <Box marginBottom={1}>
-                  <Text color="yellow" bold>
-                    🔄 Analysis Progress:
-                  </Text>
-                </Box>
-
-                {/* Current Progress */}
-                <Box paddingLeft={2} marginBottom={1} gap={4}>
-                  <Text color="green">
-                    Categories:{' '}
-                    {streamingData.partialResult?.categories?.length || 0}
-                  </Text>
-                  <Newline />
-                  <Text color="green">
-                    Summaries:{' '}
-                    {streamingData.partialResult?.summaries?.length || 0}
-                  </Text>
-                  <Newline />
-                  <Text color="green">
-                    Assignments:{' '}
-                    {streamingData.partialResult?.assignments?.length || 0}
-                  </Text>
-                </Box>
-
-                {/* Categories Preview */}
-                {streamingData.partialResult?.categories &&
-                  streamingData.partialResult.categories.length > 0 && (
-                    <Box flexDirection="column" paddingLeft={2} marginTop={1}>
-                      <Box marginBottom={1}>
-                        <Text color="cyan" bold>
-                          Latest Categories:
-                        </Text>
-                      </Box>
-                      {streamingData.partialResult.categories
-                        .slice(-3) // Show last 3 categories
-                        .map((cat: any, idx: number) => (
-                          <Box key={idx} flexDirection="column" paddingLeft={2}>
-                            <Text color="blue" bold>
-                              • {cat.title}
-                            </Text>
-                            {cat.description && (
-                              <Text color="gray" dimColor>
-                                {cat.description.slice(0, 60)}...
-                              </Text>
-                            )}
-                          </Box>
-                        ))}
-                    </Box>
-                  )}
-
-                {/* Summaries Preview */}
-                {streamingData.partialResult?.summaries &&
-                  streamingData.partialResult.summaries.length > 0 && (
-                    <Box flexDirection="column" paddingLeft={2} marginTop={1}>
-                      <Box marginBottom={1}>
-                        <Text color="cyan" bold>
-                          Latest Summaries:
-                        </Text>
-                      </Box>
-                      {streamingData.partialResult.summaries
-                        .slice(-2) // Show last 2 summaries
-                        .filter(
-                          (summary: any) =>
-                            summary && summary.id && summary.summary
-                        )
-                        .map((summary: any, idx: number) => (
-                          <Box key={idx} flexDirection="column" paddingLeft={2}>
-                            <Text color="magenta" bold>
-                              • {summary.id?.split('/').pop() || 'Unknown'}
-                            </Text>
-                            <Text color="white">
-                              {summary.summary?.slice(0, 80) ||
-                                'No summary available'}
-                              ...
-                            </Text>
-                          </Box>
-                        ))}
-                    </Box>
-                  )}
-              </Box>
-            )}
-          </Box>
-        )}
+          )}
 
         {aiPhase === 'pass2' && (
-          <Box flexDirection="column">
+          <Box flexDirection='column'>
             <Box marginBottom={2}>
-              <Text color="cyan">
+              <Text color='cyan'>
                 Pass 2: Streamlining categories and assignments
               </Text>
             </Box>
             {streamingData && (
-              <Box flexDirection="column" marginTop={1}>
+              <Box flexDirection='column' marginTop={1}>
                 <Box marginBottom={1}>
-                  <Text color="yellow" bold>
+                  <Text color='yellow' bold>
                     🔄 Streamlining:
                   </Text>
                 </Box>
                 <Box paddingLeft={2} marginBottom={1} gap={4}>
-                  <Text color="green">
+                  <Text color='green'>
                     Categories: {streamingData.categoriesCount || 0}
                   </Text>
                   <Newline />
-                  <Text color="green">
+                  <Text color='green'>
                     Aliases: {streamingData.aliasesCount || 0}
                   </Text>
                   <Newline />
-                  <Text color="green">
+                  <Text color='green'>
                     Repos Assigned: {streamingData.reposCount || 0}
                   </Text>
                 </Box>
                 {streamingData.partialResult?.categories && (
-                  <Box flexDirection="column" paddingLeft={2} marginTop={1}>
+                  <Box flexDirection='column' paddingLeft={2} marginTop={1}>
                     <Box marginBottom={1}>
-                      <Text color="cyan" bold>
+                      <Text color='cyan' bold>
                         Categories Being Streamlined:
                       </Text>
                     </Box>
                     {streamingData.partialResult.categories
                       .slice(0, 5)
-                      .map((cat: any, idx: number) => (
-                        <Text key={idx} color="blue">
+                      .map((cat: { title: string }, idx: number) => (
+                        <Text key={idx} color='blue'>
                           • {cat.title}
                         </Text>
                       ))}
@@ -2022,42 +2127,42 @@ const ConstellateStreamingApp: React.FC<{
         )}
 
         {aiPhase === 'pass3' && (
-          <Box flexDirection="column">
+          <Box flexDirection='column'>
             <Box marginBottom={2}>
-              <Text color="cyan">
+              <Text color='cyan'>
                 Pass 3: Quality assurance and optimization
               </Text>
             </Box>
             {streamingData && (
-              <Box flexDirection="column" marginTop={1}>
+              <Box flexDirection='column' marginTop={1}>
                 <Box marginBottom={1}>
-                  <Text color="yellow" bold>
+                  <Text color='yellow' bold>
                     🔍 QA Analysis:
                   </Text>
                 </Box>
                 <Box paddingLeft={2} marginBottom={1} gap={4}>
-                  <Text color="green">
+                  <Text color='green'>
                     Categories Analyzed: {streamingData.categoriesCount || 0}
                   </Text>
                   <Newline />
-                  <Text color="green">
+                  <Text color='green'>
                     Aliases Found: {streamingData.aliasesCount || 0}
                   </Text>
                   <Newline />
-                  <Text color="green">
+                  <Text color='green'>
                     Categories to Delete: {streamingData.deleteCount || 0}
                   </Text>
                   <Newline />
-                  <Text color="green">
+                  <Text color='green'>
                     Repos to Reassign: {streamingData.reassignCount || 0}
                   </Text>
                 </Box>
                 {streamingData.partialResult?.aliases &&
                   Object.keys(streamingData.partialResult.aliases).length >
                     0 && (
-                    <Box flexDirection="column" paddingLeft={2} marginTop={1}>
+                    <Box flexDirection='column' paddingLeft={2} marginTop={1}>
                       <Box marginBottom={1}>
-                        <Text color="cyan" bold>
+                        <Text color='cyan' bold>
                           Category Aliases:
                         </Text>
                       </Box>
@@ -2076,17 +2181,20 @@ const ConstellateStreamingApp: React.FC<{
                             typeof canonical === 'object' &&
                             canonical !== null &&
                             'slug' in canonical &&
-                            typeof (canonical as any).slug === 'string'
+                            typeof (canonical as { slug: unknown }).slug ===
+                              'string'
                           ) {
-                            displayValue = (canonical as any).slug;
+                            displayValue = (canonical as { slug: string }).slug;
                           } else if (
                             canonical &&
                             typeof canonical === 'object' &&
                             canonical !== null &&
                             'title' in canonical &&
-                            typeof (canonical as any).title === 'string'
+                            typeof (canonical as { title: unknown }).title ===
+                              'string'
                           ) {
-                            displayValue = (canonical as any).title;
+                            displayValue = (canonical as { title: string })
+                              .title;
                           } else if (
                             canonical !== null &&
                             canonical !== undefined
@@ -2094,7 +2202,7 @@ const ConstellateStreamingApp: React.FC<{
                             displayValue = String(canonical);
                           }
                           return (
-                            <Text key={idx} color="magenta">
+                            <Text key={idx} color='magenta'>
                               • {alias} → {displayValue}
                             </Text>
                           );
@@ -2117,12 +2225,12 @@ const ConstellateStreamingApp: React.FC<{
       totalSteps={getTotalSteps()}
       progress={getProgress()}
       footer={
-        <Text color="gray" dimColor>
+        <Text color='gray' dimColor>
           Press Q to quit
         </Text>
       }
     >
-      <StatusMessage variant="success">
+      <StatusMessage variant='success'>
         All processing complete! Check .constellator/ and {outputFilename}
       </StatusMessage>
     </StepLayout>
@@ -2197,7 +2305,7 @@ const runPreflightChecks = (
           try: async () => {
             await gateway.getAvailableModels();
           },
-          catch: (e) => new Error(String(e)),
+          catch: e => new Error(String(e)),
         }).pipe(Effect.either);
 
         if (aiCheck._tag === 'Left') {
@@ -2278,16 +2386,20 @@ const main = Effect.gen(function* () {
       i++;
     } else if (a === '--min-size' && i + 1 < args.length) {
       const n = parseInt(args[i + 1] || '');
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       if (!Number.isNaN(n)) readmeMinSize = Math.max(0, n);
       i++;
     } else if (a === '--open') {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       openOnComplete = true;
     } else if (a === '--batch-size' && i + 1 < args.length) {
       const n = parseInt(args[i + 1] || '');
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       if (!Number.isNaN(n)) pass1BatchSize = Math.max(1, n);
       i++;
     } else if (a === '--timeout' && i + 1 < args.length) {
       const n = parseInt(args[i + 1] || '');
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       if (!Number.isNaN(n)) timeoutMs = Math.max(1000, n);
       i++;
     } else if (a === '--rate-limit') {
@@ -2376,7 +2488,7 @@ const main = Effect.gen(function* () {
     try {
       const pkgRaw = yield* Effect.tryPromise({
         try: () => fs.readFile('package.json', 'utf-8'),
-        catch: (e) => new Error(String(e)),
+        catch: e => new Error(String(e)),
       });
       const pkg = JSON.parse(pkgRaw || '{}');
       console.log(pkg.version || '0.0.0');
@@ -2432,8 +2544,8 @@ const main = Effect.gen(function* () {
 
   // Interactive configuration setup (unless skipped)
   if (!skipConfig && (!savedConfig || cmd === 'config')) {
-    const configPromise = new Promise<Record<string, string>>((resolve) => {
-      const { waitUntilExit } = render(
+    const configPromise = new Promise<Record<string, string>>(resolve => {
+      render(
         <InteractiveConfigApp
           onConfigComplete={resolve}
           savedConfig={savedConfig || undefined}
@@ -2443,7 +2555,7 @@ const main = Effect.gen(function* () {
 
     const userConfig = yield* Effect.tryPromise({
       try: () => configPromise,
-      catch: (e) => {
+      catch: e => {
         console.error('Configuration setup failed:', e);
         process.exit(1);
       },
@@ -2452,7 +2564,7 @@ const main = Effect.gen(function* () {
     // Save configuration
     yield* Effect.tryPromise({
       try: () => saveConfig(artifactsDir, userConfig),
-      catch: (e) => console.warn('Failed to save configuration:', e),
+      catch: e => console.warn('Failed to save configuration:', e),
     });
 
     // Apply to environment
@@ -2499,17 +2611,23 @@ const main = Effect.gen(function* () {
               'User-Agent': 'constellator',
             },
           }),
-        catch: (e) => new Error(String(e)),
+        catch: e => new Error(String(e)),
       });
       const json = (yield* Effect.tryPromise({
         try: () => res.json(),
-        catch: (e) => new Error(String(e)),
-      })) as any;
+        catch: e => new Error(String(e)),
+      })) as {
+        resources?: {
+          core?: { limit?: number; remaining?: number; reset?: number };
+        };
+      };
       const core = json?.resources?.core || {};
       console.log(
         `[rate-limit:${when}] limit=${core.limit} remaining=${core.remaining} reset=${core.reset}`
       );
-    } catch {}
+    } catch {
+      // Ignore rate limit fetch errors
+    }
   };
 
   yield* printRate('before');
@@ -2524,7 +2642,7 @@ const main = Effect.gen(function* () {
       maxRepos={effectiveMaxRepos}
       outputFilename={outputFilename}
       username={me?.login}
-      onStarsFetched={(stars) => {
+      onStarsFetched={stars => {
         if (stars.length === 0) {
           console.log('No starred repositories found.');
           process.exit(0);
@@ -2537,7 +2655,7 @@ const main = Effect.gen(function* () {
             maxRepos={effectiveMaxRepos}
             token={token}
             outputFilename={outputFilename}
-            onFinish={(_store) => {
+            onFinish={_store => {
               Effect.runPromise(
                 Console.log(
                   `\n✅ All processing complete! Wrote .constellator/constellator.json and ${outputFilename}`
@@ -2554,7 +2672,7 @@ const main = Effect.gen(function* () {
 
   yield* Effect.tryPromise({
     try: () => waitUntilExit(),
-    catch: (e) => new Error(String(e)),
+    catch: e => new Error(String(e)),
   });
 
   yield* printRate('after');
@@ -2563,7 +2681,7 @@ const main = Effect.gen(function* () {
   Effect.map(() => undefined)
 );
 
-Effect.runPromise(main).catch((e) => {
+Effect.runPromise(main).catch(e => {
   console.error('Error:', e?.message ?? e);
   process.exit(1);
 });

@@ -4,6 +4,7 @@
  */
 
 import { gateway } from '@ai-sdk/gateway';
+import type { GatewayModelEntry } from '@ai-sdk/gateway';
 import {
   CONSTELLATE_DEFAULT_CONTEXT,
   CONSTELLATE_DEFAULT_OUTPUT,
@@ -12,9 +13,8 @@ import {
 } from './config';
 
 export type ModelLimits = { context: number; output: number };
-
 // Cache for model information from gateway
-let gatewayModelsCache: any[] | null = null;
+let gatewayModelsCache: GatewayModelEntry[] | null = null;
 let cachePromise: Promise<void> | null = null;
 
 async function ensureGatewayModelsLoaded(): Promise<void> {
@@ -25,7 +25,7 @@ async function ensureGatewayModelsLoaded(): Promise<void> {
     try {
       const result = await gateway.getAvailableModels();
       gatewayModelsCache = result.models.filter(
-        (m: any) => m.modelType === 'language'
+        m => m.modelType === 'language'
       );
     } catch (error) {
       console.warn('Failed to load models from gateway:', error);
@@ -39,7 +39,7 @@ async function ensureGatewayModelsLoaded(): Promise<void> {
 export async function loadModelLimits(modelId: string): Promise<ModelLimits> {
   await ensureGatewayModelsLoaded();
 
-  const model = gatewayModelsCache?.find((m: any) => m.id === modelId);
+  const model = gatewayModelsCache?.find(m => m.id === modelId);
   if (model) {
     // Try to extract context limits from model info
     let context = CONSTELLATE_DEFAULT_CONTEXT;
@@ -51,10 +51,10 @@ export async function loadModelLimits(modelId: string): Promise<ModelLimits> {
       const contextMatch = model.description.match(
         /(\d+)k?\s*(?:token|context)/i
       );
-      if (contextMatch) {
+      if (contextMatch && contextMatch[1]) {
         const numStr = contextMatch[1];
         const num = parseInt(numStr);
-        if (numStr.includes('k') || num > 1000) {
+        if (!isNaN(num) && (numStr.includes('k') || num > 1000)) {
           context = num * (numStr.includes('k') ? 1000 : 1);
         }
       }
@@ -63,11 +63,13 @@ export async function loadModelLimits(modelId: string): Promise<ModelLimits> {
     // Try to extract from pricing info (rough estimation)
     if (model.pricing?.input) {
       // Higher priced models often have larger context windows
-      const inputPrice = model.pricing.input;
-      if (inputPrice > 0.01) {
-        context = 128000; // Assume large context for expensive models
-      } else if (inputPrice > 0.001) {
-        context = 32000; // Medium context
+      const inputPrice = Number(model.pricing.input);
+      if (!isNaN(inputPrice)) {
+        if (inputPrice > 0.01) {
+          context = 128000; // Assume large context for expensive models
+        } else if (inputPrice > 0.001) {
+          context = 32000; // Medium context
+        }
       }
     }
 
@@ -97,7 +99,7 @@ export async function pickModelFor(
   return { id: CONSTELLATE_MODEL }; // last resort
 }
 
-export async function getAvailableModels(): Promise<any[]> {
+export async function getAvailableModels(): Promise<GatewayModelEntry[]> {
   await ensureGatewayModelsLoaded();
   return gatewayModelsCache || [];
 }

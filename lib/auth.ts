@@ -18,9 +18,11 @@ async function saveTokenToDotEnv(token: string): Promise<void> {
   let existing = '';
   try {
     existing = await fs.readFile(envPath, 'utf-8');
-  } catch {}
-  const lines = existing.split(/\r?\n/).filter((l) => l.trim().length > 0);
-  const withoutToken = lines.filter((l) => !/^\s*GITHUB_TOKEN\s*=/.test(l));
+  } catch {
+    // ignore
+  }
+  const lines = existing.split(/\r?\n/).filter(l => l.trim().length > 0);
+  const withoutToken = lines.filter(l => !/^\s*GITHUB_TOKEN\s*=/.test(l));
   withoutToken.push(`GITHUB_TOKEN=${token}`);
   const content = withoutToken.join('\n') + '\n';
   await fs.writeFile(envPath, content, 'utf-8');
@@ -40,7 +42,7 @@ export const isGitHubCLIAuthenticated = (): Effect.Effect<boolean> =>
 
 export const getGitHubCLIToken = (): Effect.Effect<string | null> =>
   runCommand('gh auth token').pipe(
-    Effect.map((t) => t.trim()),
+    Effect.map(t => t.trim()),
     Effect.orElse(() => Effect.succeed(null))
   );
 
@@ -54,7 +56,7 @@ export const writeToken = (token: string) =>
           mode: 0o600,
         }
       ),
-    catch: (e) => new Error(`Failed to write token file: ${String(e)}`),
+    catch: e => new Error(`Failed to write token file: ${String(e)}`),
   });
 
 export const readToken = Effect.gen(function* () {
@@ -67,7 +69,7 @@ export const readToken = Effect.gen(function* () {
 
   const parsedResult = yield* Effect.tryPromise({
     try: () => JSON.parse(raw),
-    catch: (e) => new Error(`Invalid JSON in token file: ${String(e)}`),
+    catch: e => new Error(`Invalid JSON in token file: ${String(e)}`),
   }).pipe(Effect.orElse(() => Effect.succeed(null)));
 
   const parsed = parsedResult as { access_token?: string } | null;
@@ -79,7 +81,7 @@ export const readToken = Effect.gen(function* () {
 
 export const removeToken = Effect.tryPromise({
   try: () => fs.rm(TOKEN_PATH, { force: true }),
-  catch: (e) => new Error(`Failed to remove token file: ${String(e)}`),
+  catch: e => new Error(`Failed to remove token file: ${String(e)}`),
 });
 
 // OAuth Device Flow
@@ -117,7 +119,7 @@ export const startDeviceFlow = (
           },
           body,
         }),
-      catch: (e) => new Error(String(e)),
+      catch: e => new Error(String(e)),
     });
     if (!r.ok)
       yield* Effect.fail(
@@ -127,7 +129,7 @@ export const startDeviceFlow = (
       );
     const json = (yield* Effect.tryPromise({
       try: () => r.json(),
-      catch: (e) => new Error(String(e)),
+      catch: e => new Error(String(e)),
     })) as DeviceCodeResp;
     yield* Console.log('\n== GitHub Login ==');
     yield* Console.log(`1) Open: ${json.verification_uri}`);
@@ -155,12 +157,12 @@ const _pollForToken = (dc: DeviceCodeResp): Effect.Effect<string, Error> =>
               grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
             }),
           }),
-        catch: (e) => new Error(String(e)),
+        catch: e => new Error(String(e)),
       });
       if (!resp.ok) continue;
       const json = (yield* Effect.tryPromise({
         try: () => resp.json(),
-        catch: (e) => new Error(String(e)),
+        catch: e => new Error(String(e)),
       })) as TokenResp;
       if (
         'access_token' in json &&
@@ -197,7 +199,7 @@ export const whoAmI = (token: string) =>
       if (!r.ok) return null;
       return (await r.json()) as { login: string };
     },
-    catch: (e) => new Error(String(e)),
+    catch: e => new Error(String(e)),
   });
 
 /**
@@ -285,7 +287,7 @@ export const ensureAuthenticatedToken = (
               yield* writeToken(cliToken);
               yield* Effect.tryPromise({
                 try: () => saveTokenToDotEnv(cliToken),
-                catch: (e) => new Error(String(e)),
+                catch: e => new Error(String(e)),
               });
               return cliToken;
             }
@@ -318,17 +320,17 @@ export const ensureAuthenticatedToken = (
 
         const tokenFromPrompt = yield* Effect.tryPromise({
           try: () =>
-            new Promise<string>((resolve) => {
+            new Promise<string>(resolve => {
               const rl = readline.createInterface({
                 input: process.stdin,
                 output: process.stdout,
               });
-              rl.question('Paste token here: ', (answer) => {
+              rl.question('Paste token here: ', answer => {
                 rl.close();
                 resolve(answer.trim());
               });
             }),
-          catch: (e) => new Error(String(e)),
+          catch: e => new Error(String(e)),
         });
 
         if (!tokenFromPrompt) {
@@ -340,7 +342,7 @@ export const ensureAuthenticatedToken = (
           yield* writeToken(tokenFromPrompt);
           yield* Effect.tryPromise({
             try: () => saveTokenToDotEnv(tokenFromPrompt),
-            catch: (e) => new Error(String(e)),
+            catch: e => new Error(String(e)),
           });
           yield* Console.log(
             `✅ Logged in as ${user.login}. Saved token to ${TOKEN_PATH} and .env`
@@ -359,7 +361,7 @@ export const ensureAuthenticatedToken = (
         yield* writeToken(token);
         yield* Effect.tryPromise({
           try: () => saveTokenToDotEnv(token),
-          catch: (e) => new Error(String(e)),
+          catch: e => new Error(String(e)),
         });
         yield* Console.log(
           `✅ Logged in as ${user.login}. Saved token to ${TOKEN_PATH} and .env`

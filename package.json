@@ -16,7 +16,12 @@
   "scripts": {
     "build": "bun build index.tsx --outdir dist --target node --minify --sourcemap=external",
     "dev": "bun run index.tsx",
-    "prepublishOnly": "bun run build"
+    "prepublishOnly": "bun run build",
+    "lint": "bunx eslint .",
+    "lint:fix": "bunx eslint . --fix",
+    "format": "bunx prettier --write .",
+    "format:check": "bunx prettier --check .",
+    "type-check": "bunx tsc --noEmit"
   },
   "license": "MIT",
   "repository": {
@@ -24,7 +29,15 @@
     "url": "git+https://github.com/mislavjc/constellator.git"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "@typescript-eslint/eslint-plugin": "^8.42.0",
+    "@typescript-eslint/parser": "^8.42.0",
+    "eslint": "^9.34.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.4",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "prettier": "^3.6.2"
   },
   "peerDependencies": {
     "typescript": "^5"

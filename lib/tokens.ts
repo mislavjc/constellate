@@ -35,7 +35,7 @@ export function headTailSlice(
   const tail = text.slice(-tailCharCount);
 
   // Clean up the tail to avoid cutting in the middle of words/sentences
-  const cleanTail = tail.replace(/^[^\n]*$/, (match) => {
+  const cleanTail = tail.replace(/^[^\n]*$/, match => {
     // Try to find a good break point (sentence, then word boundary)
     const sentenceBreak = match.search(/[.!?]\s/);
     if (sentenceBreak > match.length * 0.3) {
@@ -56,7 +56,7 @@ export function countWords(text: string): number {
   return (text || '')
     .trim()
     .split(/\s+/)
-    .filter((word) => word.length > 0).length;
+    .filter(word => word.length > 0).length;
 }
 
 export function estimateTokensFromWords(wordCount: number): number {

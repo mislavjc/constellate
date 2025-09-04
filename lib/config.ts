@@ -6,7 +6,7 @@ export const TOKEN_PATH = path.join(os.homedir(), '.constellator.json');
 const CONFIG_FILE_PATH = '.constellator/config.json';
 
 // Load saved configuration
-function loadSavedConfig(): Record<string, any> {
+function loadSavedConfig(): Record<string, unknown> {
   try {
     const configData = fs.readFileSync(CONFIG_FILE_PATH, 'utf-8');
     const parsed = JSON.parse(configData);
@@ -43,7 +43,7 @@ export const CONSTELLATE_MODEL = (() => {
 export const CONSTELLATE_FALLBACK_MODELS = (() => {
   if (savedConfig.CONSTELLATE_FALLBACK_MODELS) {
     if (Array.isArray(savedConfig.CONSTELLATE_FALLBACK_MODELS)) {
-      return savedConfig.CONSTELLATE_FALLBACK_MODELS.map((s: any) =>
+      return savedConfig.CONSTELLATE_FALLBACK_MODELS.map((s: unknown) =>
         String(s).trim()
       ).filter((s: string) => s.length > 0);
     } else {

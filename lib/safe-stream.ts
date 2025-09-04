@@ -16,7 +16,7 @@ type StreamArgs<T extends z.ZodType<any, any, any>> = {
   messages: ModelMessage[];
   maxRetries?: number;
   reserveOutput?: number;
-  tools?: Record<string, any>;
+  tools?: Record<string, unknown>;
 };
 
 export async function safeStreamObject<T extends z.ZodType<any, any, any>>({
@@ -45,8 +45,8 @@ export async function safeStreamObject<T extends z.ZodType<any, any, any>>({
         tools,
       });
       return res; // caller consumes the stream
-    } catch (err: any) {
-      const msg = String(err?.message || err);
+    } catch (err: unknown) {
+      const msg = String((err as Error)?.message || err);
       const isCtx =
         /context window|context_length|length_exceeded|too large|maximum context|token limit/i.test(
           msg
@@ -82,7 +82,7 @@ export async function safeStreamObject<T extends z.ZodType<any, any, any>>({
                   typeof m.content === 'string'
                     ? m.content.slice(0, Math.floor(m.content.length * 0.5))
                     : JSON.stringify(m.content || ''),
-              } as ModelMessage)
+              }) as ModelMessage
           ),
           Math.floor(plan.maxInput * 0.6)
         );

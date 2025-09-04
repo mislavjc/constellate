@@ -60,8 +60,8 @@ export function fitMessagesWithinBudget(
       typeof m.content === 'string'
         ? estimateTokens(m.content)
         : Array.isArray(m.content)
-        ? m.content.length * 10 // Rough estimate for array content
-        : 0,
+          ? m.content.length * 10 // Rough estimate for array content
+          : 0,
   }));
 
   let total = counts.reduce((a, x) => a + x.tokens, 0) + JSON_OVERHEAD;
@@ -75,14 +75,14 @@ export function fitMessagesWithinBudget(
       return prio(a.role) - prio(b.role) || (b.tokens || 0) - (a.tokens || 0);
     });
 
-  const cloned = messages.map((m) => ({
+  const cloned = messages.map(m => ({
     ...m,
     content:
       typeof m.content === 'string'
         ? m.content
         : Array.isArray(m.content)
-        ? '[ARRAY_CONTENT]' // Placeholder for array content
-        : String(m.content || ''),
+          ? '[ARRAY_CONTENT]' // Placeholder for array content
+          : String(m.content || ''),
   }));
   let trimmed = false;
 
@@ -157,13 +157,7 @@ export async function computeReadmeTokenBudget(args: {
 
   // Allocate ~70% of usable input to README text across the batch, 30% to metadata
   const readmePool = Math.floor(usableInput * 0.7);
-  const metaPool = usableInput - readmePool;
 
-  // Reserve meta per repo first
-  const perRepoMeta = Math.max(
-    64,
-    Math.floor(metaPool / Math.max(1, args.repoCountInBatch))
-  );
   const perRepoReadme = Math.max(
     256,
     Math.floor(

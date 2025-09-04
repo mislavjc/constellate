@@ -1,11 +1,15 @@
-import { RepoFeature, RepoFacts, CategoryGlossary } from './schemas';
+import {
+  RepoFactsSchema,
+  CategoryGlossarySchema,
+  type RepoFeature,
+  type ConstellateStore,
+  type Category,
+} from './schemas';
 
-import { ExpandPlanPlus } from './schemas';
-import { CategoryDraft, AssignmentDraft } from './schemas';
-import { StreamlinedPlan } from './schemas';
-import { ConstellateStore } from './schemas';
-import { QaFix } from './schemas';
-import { Category } from './schemas';
+import { ExpandPlanPlusSchema } from './schemas';
+import { CategoryDraftSchema, AssignmentDraftSchema } from './schemas';
+import { StreamlinedPlanSchema } from './schemas';
+import { QaFixSchema } from './schemas';
 import type { ModelMessage } from 'ai';
 import { tool } from 'ai';
 import { z } from 'zod';
@@ -50,7 +54,7 @@ function estimateTokensFromMessages(messages: ModelMessage[]): number {
   // Create a simple cache key from message structure
   const cacheKey = messages
     .map(
-      (m) =>
+      m =>
         `${m.role}:${
           typeof m.content === 'string' ? m.content.length : 'array'
         }`
@@ -101,10 +105,10 @@ function slim<T extends object>(o: T): T {
     if (Array.isArray(value)) {
       // Recursively clean arrays
       result[key] = value
-        .map((item) =>
+        .map(item =>
           typeof item === 'object' && item !== null ? slim(item) : item
         )
-        .filter((item) => item !== '' && item !== null && item !== undefined);
+        .filter(item => item !== '' && item !== null && item !== undefined);
     } else if (typeof value === 'object' && value !== null) {
       // Recursively clean nested objects
       result[key] = slim(value);
@@ -117,7 +121,9 @@ function slim<T extends object>(o: T): T {
 }
 
 // Absorb QA aliases back into glossary for future runs
-export async function absorbAliasesIntoGlossary(fix: z.infer<typeof QaFix>) {
+export async function absorbAliasesIntoGlossary(
+  fix: z.infer<typeof QaFixSchema>
+) {
   const g = await loadCategoryGlossary();
   for (const [alias, target] of Object.entries(fix.aliases || {})) {
     if (!g.discouraged_aliases[alias]) g.discouraged_aliases[alias] = target;
@@ -131,23 +137,23 @@ export function filterCategoriesForReadme(
   store: ConstellateStore,
   minSize = 1
 ) {
-  return store.categories.filter((c) => c.repos.length >= minSize);
+  return store.categories.filter(c => c.repos.length >= minSize);
 }
 
 // Auto-shrink streaming wrapper for overflow fallback
 async function* streamWithAutoShrink(
-  processBatch: (group: RepoFeature[]) => Promise<any>,
+  processBatch: (group: RepoFeature[]) => Promise<unknown>,
   initialBatch: RepoFeature[]
-): AsyncGenerator<any, void, unknown> {
+): AsyncGenerator<unknown, void, unknown> {
   let group = initialBatch;
   while (group.length) {
     try {
       const result = await processBatch(group);
-      const { partialObjectStream } = result;
+      const { partialObjectStream } = result as { partialObjectStream: any };
       for await (const chunk of partialObjectStream) yield chunk;
       break; // success
-    } catch (e: any) {
-      if (!/context|length|token/i.test(String(e?.message))) throw e;
+    } catch (e: unknown) {
+      if (!/context|length|token/i.test(String((e as Error)?.message))) throw e;
       if (group.length === 1) throw e; // cannot shrink further
       const mid = Math.floor(group.length / 2);
       // Recurse: first half then second half
@@ -159,12 +165,13 @@ async function* streamWithAutoShrink(
 }
 
 // Category Glossary utilities - with caching for performance
-let glossaryCache: z.infer<typeof CategoryGlossary> | null = null;
-let glossaryCachePromise: Promise<z.infer<typeof CategoryGlossary>> | null =
-  null;
+let glossaryCache: z.infer<typeof CategoryGlossarySchema> | null = null;
+let glossaryCachePromise: Promise<
+  z.infer<typeof CategoryGlossarySchema>
+> | null = null;
 
 export async function loadCategoryGlossary(): Promise<
-  z.infer<typeof CategoryGlossary>
+  z.infer<typeof CategoryGlossarySchema>
 > {
   // Return cached result if available
   if (glossaryCache) {
@@ -184,12 +191,12 @@ export async function loadCategoryGlossary(): Promise<
         '.constellator/category-glossary.json',
         'utf-8'
       );
-      const parsed = CategoryGlossary.parse(JSON.parse(data));
+      const parsed = CategoryGlossarySchema.parse(JSON.parse(data));
       glossaryCache = parsed; // Cache the result
       return parsed;
     } catch {
       // Return default if file doesn't exist
-      const defaultGlossary = CategoryGlossary.parse({
+      const defaultGlossary = CategoryGlossarySchema.parse({
         version: 3,
         preferred: [
           {
@@ -252,7 +259,7 @@ export async function loadCategoryGlossary(): Promise<
 }
 
 export async function saveCategoryGlossary(
-  glossary: z.infer<typeof CategoryGlossary>
+  glossary: z.infer<typeof CategoryGlossarySchema>
 ): Promise<void> {
   const fs = await import('fs/promises');
   await fs.mkdir('.constellator', { recursive: true });
@@ -298,7 +305,7 @@ export async function* aiPass0FactsExtractorStreaming(
         repoCountInBatch: batchGroup.length,
       });
 
-      const compact = batchGroup.map((r) => ({
+      const compact = batchGroup.map(r => ({
         repo: {
           id: r.id,
           name: r.name,
@@ -342,7 +349,7 @@ export async function* aiPass0FactsExtractorStreaming(
             .array(
               z.object({
                 id: z.string(),
-                facts: RepoFacts,
+                facts: RepoFactsSchema,
                 purpose: z.string().default(''),
                 capabilities: z.array(z.string()).default([]),
                 tech_stack: z.array(z.string()).default([]),
@@ -365,7 +372,7 @@ export async function* aiPass1ExpandStreaming(batchRepos: RepoFeature[]) {
     repoCountInBatch: batchRepos.length,
   });
 
-  const compact = batchRepos.map((r) => ({
+  const compact = batchRepos.map(r => ({
     id: r.id,
     name: r.name,
     language: r.language,
@@ -435,7 +442,7 @@ Segmentation guidance:
   const { partialObjectStream } = await safeStreamObject({
     model,
     modelId: modelName,
-    schema: ExpandPlanPlus,
+    schema: ExpandPlanPlusSchema,
     messages,
     tools: {
       // Lookup repo meta by id
@@ -443,7 +450,7 @@ Segmentation guidance:
         description: 'Get metadata for a repository by ID',
         inputSchema: z.object({ id: z.string() }),
         execute: async ({ id }) => {
-          const byId = new Map(compact.map((r) => [r.id, r] as const));
+          const byId = new Map(compact.map(r => [r.id, r] as const));
           return byId.get(id) || null;
         },
       }),
@@ -453,7 +460,7 @@ Segmentation guidance:
           'Search a repo README for a keyword and return a short excerpt',
         inputSchema: z.object({ id: z.string(), q: z.string() }),
         execute: async ({ id, q }) => {
-          const repo = compact.find((r) => r.id === id);
+          const repo = compact.find(r => r.id === id);
           if (!repo || !repo.readme) return null;
           const idx = repo.readme.toLowerCase().indexOf(q.toLowerCase());
           if (idx < 0) return null;
@@ -475,13 +482,13 @@ Segmentation guidance:
 export async function* aiPass1BRefineCategories(
   allRepos: RepoFeature[],
   merged: {
-    categories: z.infer<typeof CategoryDraft>[];
-    assignments: z.infer<typeof AssignmentDraft>[];
+    categories: z.infer<typeof CategoryDraftSchema>[];
+    assignments: z.infer<typeof AssignmentDraftSchema>[];
     summaries: Record<string, { summary: string; key_topics: string[] }>;
   },
   policies: { maxCategories: number; splitThreshold?: number }
 ) {
-  const repoSignals = allRepos.map((r) => ({
+  const repoSignals = allRepos.map(r => ({
     id: r.id,
     name: r.name,
     topics: r.topics,
@@ -538,7 +545,7 @@ Rules:
   const { partialObjectStream } = await safeStreamObject({
     model,
     modelId: modelName,
-    schema: ExpandPlanPlus, // reuse: categories+assignments are compatible
+    schema: ExpandPlanPlusSchema, // reuse: categories+assignments are compatible
     messages,
     tools: {
       category_guess: tool({
@@ -549,7 +556,7 @@ Rules:
           key_topics: z.array(z.string()).default([]),
         }),
         execute: async ({ id, key_topics }) => {
-          const r = repoSignals.find((x) => x.id === id);
+          const r = repoSignals.find(x => x.id === id);
           return { id, hints: (r?.keywords || []).slice(0, 3), key_topics };
         },
       }),
@@ -568,7 +575,7 @@ export async function* aiPass25BudgetConsolidate(
   allRepos: RepoFeature[],
   budget: { min: number; max: number }
 ) {
-  const repoMeta = allRepos.map((r) => ({
+  const repoMeta = allRepos.map(r => ({
     id: r.id,
     name: r.name,
     language: r.language,
@@ -580,12 +587,12 @@ export async function* aiPass25BudgetConsolidate(
   }));
 
   const snapshot = {
-    categories: store.categories.map((c) => ({
+    categories: store.categories.map(c => ({
       slug: c.slug,
       title: c.title,
       description: c.description,
       criteria: c.criteria,
-      repos: c.repos.map((r) => r.id),
+      repos: c.repos.map(r => r.id),
     })),
   };
 
@@ -640,10 +647,10 @@ Return updated canonical categories and a reassignment map (id -> category).`,
 }
 
 export async function mergeExpandPlans(
-  plans: z.infer<typeof ExpandPlanPlus>[]
+  plans: z.infer<typeof ExpandPlanPlusSchema>[]
 ) {
-  const catMap = new Map<string, z.infer<typeof CategoryDraft>>();
-  const assign: z.infer<typeof AssignmentDraft>[] = [];
+  const catMap = new Map<string, z.infer<typeof CategoryDraftSchema>>();
+  const assign: z.infer<typeof AssignmentDraftSchema>[] = [];
   const summaries: Record<string, { summary: string; key_topics: string[] }> =
     {};
 
@@ -686,8 +693,8 @@ export async function mergeExpandPlans(
 export async function* aiPass2StreamlineStreaming(
   allRepos: RepoFeature[],
   merged: {
-    categories: z.infer<typeof CategoryDraft>[];
-    assignments: z.infer<typeof AssignmentDraft>[];
+    categories: z.infer<typeof CategoryDraftSchema>[];
+    assignments: z.infer<typeof AssignmentDraftSchema>[];
     summaries: Record<string, { summary: string; key_topics: string[] }>;
   },
   policies: {
@@ -698,7 +705,7 @@ export async function* aiPass2StreamlineStreaming(
 ) {
   const glossary = await loadCategoryGlossary();
 
-  const repoSummaries = allRepos.map((r) => ({
+  const repoSummaries = allRepos.map(r => ({
     id: r.id,
     name: r.name,
     language: r.language,
@@ -768,7 +775,7 @@ If two categories fit equally, choose the one with more repos after consolidatio
   const { partialObjectStream } = await safeStreamObject({
     model,
     modelId: modelName,
-    schema: StreamlinedPlan,
+    schema: StreamlinedPlanSchema,
     messages,
     tools: {
       glossary_lookup: tool({
@@ -777,7 +784,7 @@ If two categories fit equally, choose the one with more repos after consolidatio
         execute: async ({ alias }) => {
           const a = cachedSlugify(alias);
           const entry = glossary.preferred.find(
-            (c) => c.slug === a || cachedSlugify(c.title) === a
+            c => c.slug === a || cachedSlugify(c.title) === a
           );
           return entry || null;
         },
@@ -810,16 +817,31 @@ export async function* aiPass3QualityAssuranceStreaming(
 ) {
   const glossary = await loadCategoryGlossary();
 
-  const compactCats = storeDraft.categories.map((c) => ({
+  const compactCats = storeDraft.categories.map(c => ({
     slug: c.slug,
     title: c.title,
     count: c.repos.length,
-    sample: c.repos.slice(0, 6).map((r) => r.id),
+    sample: c.repos.slice(0, 6).map(r => r.id),
   }));
 
-  const repoMeta: Record<string, any> = {};
+  const repoMeta: Record<
+    string,
+    {
+      name: string;
+      description?: string;
+      language?: string;
+      stars: number;
+      summary?: string;
+      topics?: string[];
+      facts?: any;
+      capabilities?: string[];
+      tech_stack?: string[];
+    }
+  > = {};
   for (const r of allRepos) {
     repoMeta[r.id] = {
+      name: r.name,
+      stars: r.stars,
       summary: r.summary ?? '',
       topics: r.key_topics ?? r.topics ?? [],
       // Include Pass-0 facts for richer context
@@ -871,7 +893,7 @@ If count < minCategorySize, either (a) alias to closest match, or (b) keep if it
   const { partialObjectStream } = await safeStreamObject({
     model,
     modelId: modelName,
-    schema: QaFix,
+    schema: QaFixSchema,
     messages,
     tools: {
       sample_repo: tool({
@@ -881,11 +903,24 @@ If count < minCategorySize, either (a) alias to closest match, or (b) keep if it
         execute: async ({ slug }) => {
           const s = cachedSlugify(slug);
           const ids = (
-            storeDraft.categories.find((c) => c.slug === s)?.repos || []
+            storeDraft.categories.find(c => c.slug === s)?.repos || []
           )
             .slice(0, 6)
-            .map((r) => r.id);
-          const out: Record<string, any> = {};
+            .map(r => r.id);
+          const out: Record<
+            string,
+            {
+              name: string;
+              description?: string;
+              language?: string;
+              stars: number;
+              summary?: string;
+              topics?: string[];
+              facts?: any;
+              capabilities?: string[];
+              tech_stack?: string[];
+            } | null
+          > = {};
           for (const id of ids) out[id] = repoMeta[id] || null;
           return out;
         },
@@ -901,7 +936,7 @@ If count < minCategorySize, either (a) alias to closest match, or (b) keep if it
 
 export function applyQaFix(
   store: ConstellateStore,
-  fix: z.infer<typeof QaFix>
+  fix: z.infer<typeof QaFixSchema>
 ) {
   // 1) Build canonical slug map
   const aliasTo = new Map<string, string>();
@@ -937,26 +972,26 @@ export function applyQaFix(
   const reassign = new Map(
     (fix.reassign || [])
       .filter(
-        (x) =>
+        x =>
           typeof x.id === 'string' &&
           x.id.trim() &&
           typeof x.toCategory === 'string' &&
           x.toCategory.trim()
       )
-      .map((x) => [x.id, cachedSlugify(x.toCategory)])
+      .map(x => [x.id, cachedSlugify(x.toCategory)])
   );
 
   const kill = new Set(
     (fix.delete || [])
-      .filter((s) => typeof s === 'string' && s.trim())
-      .map((s) => cachedSlugify(s))
+      .filter(s => typeof s === 'string' && s.trim())
+      .map(s => cachedSlugify(s))
   );
 
   for (const c of store.categories) {
     const orig = c.slug;
     const target = reassign.has(orig)
       ? reassign.get(orig)!
-      : aliasTo.get(orig) ?? orig;
+      : (aliasTo.get(orig) ?? orig);
 
     if (kill.has(orig)) continue;
 
@@ -995,9 +1030,7 @@ export function applyQaFix(
   }
 
   // 4) Replace store categories with canonical, drop empties
-  store.categories = Array.from(canon.values()).filter(
-    (c) => c.repos.length > 0
-  );
+  store.categories = Array.from(canon.values()).filter(c => c.repos.length > 0);
 
   // 5) Sort consistently
   for (const c of store.categories) {
@@ -1017,7 +1050,7 @@ export function graftSummariesIntoFeatures(
   features: RepoFeature[],
   sm: Record<string, { summary: string; key_topics: string[] }>
 ) {
-  const byId = new Map(features.map((r) => [r.id, r] as const));
+  const byId = new Map(features.map(r => [r.id, r] as const));
   for (const [id, v] of Object.entries(sm)) {
     const f = byId.get(id);
     if (f) {
@@ -1030,16 +1063,25 @@ export function graftSummariesIntoFeatures(
 // Graft Pass-0 facts into features
 export function graftFactsIntoFeatures(
   features: RepoFeature[],
-  factsResult: any
+  factsResult: {
+    results?: {
+      id: string;
+      facts?: z.infer<typeof RepoFactsSchema>;
+      purpose?: string;
+      keywords?: string[];
+      capabilities?: string[];
+      tech_stack?: string[];
+    }[];
+  }
 ) {
-  const byId = new Map(features.map((r) => [r.id, r] as const));
-  for (const result of factsResult.results) {
+  const byId = new Map(features.map(r => [r.id, r] as const));
+  for (const result of factsResult.results || []) {
     const f = byId.get(result.id);
     if (f) {
       f.facts = result.facts;
       f.purpose = result.purpose;
-      f.capabilities = result.capabilities;
-      f.tech_stack = result.tech_stack;
+      f.capabilities = result.capabilities || [];
+      f.tech_stack = result.tech_stack || [];
       if (Array.isArray(result.keywords)) f.keywords = result.keywords;
     }
   }
@@ -1054,7 +1096,11 @@ export function ensureMinimumFeatureSignals(features: RepoFeature[]) {
     (s || '').replace(whitespaceRegex, ' ').trim().slice(0, 220);
 
   // Optimized string processing function
-  const processStrings = (arr: any[], maxLength: number, fallback: string) => {
+  const processStrings = (
+    arr: string[],
+    maxLength: number,
+    fallback: string
+  ) => {
     const result: string[] = [];
     for (let i = 0; i < arr.length && result.length < maxLength; i++) {
       const str = String(arr[i] || '')
@@ -1128,15 +1174,15 @@ export function backfillCategoriesFromIndex(
   store: ConstellateStore,
   allRepos: RepoFeature[]
 ) {
-  const catBySlug = new Map(store.categories.map((c) => [c.slug, c]));
-  const repoById = new Map(allRepos.map((r) => [r.id, r]));
+  const catBySlug = new Map(store.categories.map(c => [c.slug, c]));
+  const repoById = new Map(allRepos.map(r => [r.id, r]));
 
   // Ensure category objects exist for every indexed slug
   for (const { category } of Object.values(store.index)) {
     if (!catBySlug.has(category)) {
       const title = category
         .replace(/-/g, ' ')
-        .replace(/\b\w/g, (s) => s.toUpperCase());
+        .replace(/\b\w/g, s => s.toUpperCase());
       const c: Category = {
         slug: category,
         title,
@@ -1178,7 +1224,7 @@ export function backfillCategoriesFromIndex(
 
   // Update store.categories with backfilled categories
   store.categories = Array.from(catBySlug.values()).filter(
-    (c) => c.repos.length > 0
+    c => c.repos.length > 0
   );
 
   // Sort for stable output
